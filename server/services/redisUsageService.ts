@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 
 export const RATE_LIMIT_MAX = 800; // 800 requests
 export const RATE_LIMIT_WINDOW_SECONDS = 5 * 60 * 60; // 5 hours = 18,000 seconds
@@ -6,11 +6,12 @@ export const RATE_LIMIT_WINDOW_MS = RATE_LIMIT_WINDOW_SECONDS * 1000;
 
 // Redis client initialization with lazy connect
 const redisUrl = process.env.REDIS_URL || process.env.UPSTASH_REDIS_URL || 'redis://127.0.0.1:6379';
-let redisClient: Redis | null = null;
+const RedisClass: any = (Redis as any)?.default || Redis;
+let redisClient: any = null;
 let isRedisConnected = false;
 
 try {
-  redisClient = new Redis(redisUrl, {
+  redisClient = new RedisClass(redisUrl, {
     lazyConnect: true,
     maxRetriesPerRequest: 1,
     enableOfflineQueue: false,
