@@ -1,28 +1,43 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { useUser } from '@clerk/clerk-react';
-import { GatewayStats } from '../lib/gateway';
-import { useToasts } from '../components/ui/toast';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Coins,
-  DollarSign,
-  RefreshCw,
-  Settings,
-  Lock,
-  ArrowLeft,
-  Mail,
-  Gauge,
   KeyRound,
-  CheckCircle,
   Copy,
+  CheckCircle,
   Zap,
+  RotateCw,
+  Mail,
+  DollarSign,
+  Gauge,
+  LogOut,
+  Layers,
 } from 'lucide-react';
-import CountUp from '../components/ui/CountUp';
+import { useUser, useClerk } from '@clerk/clerk-react';
+import { useToasts } from '../components/ui/toast';
+import { CountUp } from '../components/ui/CountUp';
 import { decrypt } from '../lib/encryption';
 import './Dashboard.css';
 
 interface DashboardProps {
   onNavigateHome?: () => void;
-  onNavigateSignIn?: () => void;
+}
+
+interface GatewayStats {
+  tier?: string;
+  email?: string;
+  keyPrefix?: string;
+  plainKey?: string;
+  stats?: {
+    totalRequests?: number;
+    failedRequests?: number;
+    totalCostUsd?: number;
+    usageLeft?: number;
+    maxLimit?: number;
+    tokens?: {
+      total?: number;
+      prompt?: number;
+      completion?: number;
+    };
+  };
 }
 
 const DEFAULT_GATEWAY_STATS: GatewayStats = {
@@ -43,12 +58,12 @@ const DEFAULT_GATEWAY_STATS: GatewayStats = {
 
 export const Dashboard: React.FC<DashboardProps> = ({ onNavigateHome }) => {
   const { user, isLoaded } = useUser();
+  const { signOut } = useClerk();
   const toasts = useToasts();
 
   const [stats, setStats] = useState<GatewayStats>(DEFAULT_GATEWAY_STATS);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [isDecrypted, setIsDecrypted] = useState(false);
 
   const userEmail = user?.primaryEmailAddress?.emailAddress || '';
 
@@ -56,7 +71,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateHome }) => {
     try {
       setLoading(true);
       const queryParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
-      const res = await fetch(`/api/gateway/stats${queryParam}`);
+      
+      // 1. Fetch from /v1/user/me (DB + Redis authoritative endpoint)
+      let res = await fetch(`/v1/user/me${queryParam}`);
+      if (!res.ok) {
+        res = await fetch(`/api/gateway/stats${queryParam}`);
+      }
 
       if (res.ok) {
         const rawData = await res.json();
@@ -64,7 +84,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateHome }) => {
           const decryptedStr = decrypt(rawData.payload);
           const data = JSON.parse(decryptedStr);
           setStats(data);
-          setIsDecrypted(true);
+        } else if (rawData.user && rawData.database) {
+          setStats({
+            plainKey: rawData.user.apiKey,
+            keyPrefix: rawData.user.apiKey?.slice(0, 16) || 'sk-live',
+            email: rawData.user.email,
+            tier: (rawData.user.tier || 'PRO').toUpperCase(),
+            stats: {
+              totalRequests: rawData.usage?.totalRequests || 0,
+              totalCostUsd: rawData.usage?.totalCostUsd || 0,
+              usageLeft: rawData.rateLimit?.remaining ?? 800,
+              maxLimit: rawData.rateLimit?.limit ?? 800,
+              tokens: {
+                total: rawData.usage?.tokens?.total || 0,
+                prompt: rawData.usage?.tokens?.prompt || 0,
+                completion: rawData.usage?.tokens?.completion || 0,
+              },
+            },
+          });
         } else if (rawData.stats) {
           setStats(rawData);
         }
@@ -93,14 +130,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateHome }) => {
   // Real Server Computations
   const activeStats = stats || DEFAULT_GATEWAY_STATS;
   const tier = activeStats.tier || 'PRO';
-  const maxLimit = (activeStats.stats as any)?.maxLimit ?? 800;
+  const maxLimit = activeStats.stats?.maxLimit ?? 800;
   const requestsMade = activeStats.stats?.totalRequests ?? 0;
   const totalTokens = activeStats.stats?.tokens?.total ?? 0;
   const totalCost = activeStats.stats?.totalCostUsd ?? 0;
-  const usageLeft = (activeStats.stats as any)?.usageLeft ?? Math.max(0, maxLimit - requestsMade);
+  const usageLeft = activeStats.stats?.usageLeft ?? Math.max(0, maxLimit - requestsMade);
   const quotaPercentage = maxLimit > 0 ? Math.min(100, (requestsMade / maxLimit) * 100) : 0;
-  const currentEmail = userEmail || (activeStats as any).email || 'operator@intelligence.internal';
-  const displayKey = activeStats.plainKey || (activeStats.keyPrefix ? `${activeStats.keyPrefix}••••••••••••••••••••` : 'sk-live-authenticating...');
+  const currentEmail = userEmail || activeStats.email || 'operator@intelligence.internal';
+  
+  const displayKey = loading && !activeStats.plainKey
+    ? 'Loading API Key from DB...'
+    : (activeStats.plainKey || (activeStats.keyPrefix ? `${activeStats.keyPrefix}••••••••••••••••••••` : 'sk-live-authenticating...'));
 
   return (
     <div className="dash-page-wrapper selection:bg-white/20">
@@ -118,61 +158,75 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateHome }) => {
                 type="button"
                 onClick={onNavigateHome}
                 className="dash-back-btn"
-                aria-label="Back to landing page"
+                title="Back to Landing"
               >
-                <ArrowLeft size={16} />
+                ← Back
               </button>
             )}
-            <div className="dash-heading-wrap">
-              <h1>
-                GATEWAY V2
-                <span className="dash-badge-secure">
-                  <Lock size={9} /> Secure Session
-                </span>
-              </h1>
-              <p>Enterprise Orchestration &amp; Analytics</p>
+            <div className="dash-brand-logo">
+              <span className="dash-brand-symbol">✦</span>
+              <span className="dash-brand-title">INTELLIGENCE PLATFORM</span>
             </div>
+            <span className="dash-badge-secure">
+              <span className="dash-pulse-dot" />
+              GATEWAY LIVE
+            </span>
           </div>
 
-          <div className="dash-actions">
+          <div className="dash-user-controls">
             <button
               type="button"
               onClick={() => loadData()}
-              className="dash-icon-btn"
-              title="Refresh live telemetry"
+              className="dash-refresh-btn"
+              disabled={loading}
+              title="Refresh telemetry"
             >
-              <RefreshCw size={17} className={loading ? 'animate-spin' : ''} />
+              <RotateCw size={14} className={loading ? 'animate-spin' : ''} />
+              <span>{loading ? 'Syncing...' : 'Sync'}</span>
             </button>
+
             <button
               type="button"
+              className="dash-settings-btn"
               onClick={() => toasts.info('Settings', 'Gateway configuration panel')}
-              className="dash-icon-btn"
-              title="Settings"
+              title="Account Settings"
             >
-              <Settings size={17} />
+              Settings
+            </button>
+
+            <button
+              type="button"
+              onClick={() => signOut({ redirectUrl: '/' })}
+              className="dash-logout-btn"
+              title="Sign Out"
+            >
+              <LogOut size={14} />
+              <span>Exit</span>
             </button>
           </div>
         </header>
 
-        {/* 4 Focused Real Telemetry Cards */}
+        {/* Primary Operational Metric Cards (4 Cards) */}
         <section className="dash-kpi-grid">
           {/* 1. Total Tokens */}
           <div className="dash-kpi-card">
             <div className="dash-kpi-header">
               <span className="dash-kpi-label">Total Tokens</span>
               <div className="dash-kpi-icon-wrap">
-                <Coins size={16} />
+                <Layers size={16} />
               </div>
             </div>
             <div>
               <div className="dash-kpi-value">
-                <CountUp to={totalTokens} duration={0.8} separator="," />
+                <CountUp to={totalTokens} duration={1.0} separator="," />
               </div>
-              <div className="dash-kpi-sub">Prompt + Completion</div>
+              <div className="dash-kpi-sub">
+                Prompt: {(activeStats.stats?.tokens?.prompt || 0).toLocaleString()} | Output: {(activeStats.stats?.tokens?.completion || 0).toLocaleString()}
+              </div>
             </div>
           </div>
 
-          {/* 2. Total Cost */}
+          {/* 2. Total Incurred Cost */}
           <div className="dash-kpi-card">
             <div className="dash-kpi-header">
               <span className="dash-kpi-label">Total Cost</span>
@@ -298,19 +352,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateHome }) => {
               </div>
 
               <div className="dash-curl-snippet">
-                curl http://localhost:5000/v1/chat/completions \<br />
-                &nbsp;&nbsp;-H <span className="highlight">"Authorization: Bearer {activeStats.plainKey ? activeStats.plainKey.slice(0, 16) + '...' : 'sk-live...'}"</span>
+                <span className="dash-curl-comment"># Authenticate requests via Header</span>
+                <code>curl -H &quot;Authorization: Bearer {activeStats.plainKey || 'YOUR_API_KEY'}&quot; \</code>
+                <code>  https://beta.frenix.sh/v1/chat/completions</code>
               </div>
             </div>
           </div>
         </section>
-
-        {/* Footer Metadata */}
-        <footer className="dash-footer">
-          <span>Cluster Identity: GWS-409</span>
-          <span>Session: Encrypted</span>
-          <span>Frenix Infrastructure Group</span>
-        </footer>
       </div>
     </div>
   );
