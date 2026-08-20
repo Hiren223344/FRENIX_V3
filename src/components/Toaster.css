@@ -1,0 +1,125 @@
+/* ==========================================================================
+   Toaster Stacked Notification System
+   ========================================================================== */
+
+.shadow-menu {
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.shadow-hover {
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+/* Theme variants */
+.bg-geist-background {
+  background: rgba(26, 26, 30, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.text-gray-1000 {
+  color: #ffffff;
+}
+
+.bg-geist-100 {
+  background: rgba(26, 26, 30, 0.94);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.bg-blue-700 {
+  background: rgba(29, 78, 216, 0.94);
+  color: #ffffff;
+  border: 1px solid rgba(147, 197, 253, 0.3);
+}
+
+.bg-amber-800 {
+  background: rgba(146, 64, 14, 0.94);
+  color: #ffffff;
+  border: 1px solid rgba(253, 230, 138, 0.3);
+}
+
+.bg-red-800 {
+  background: rgba(153, 27, 27, 0.94);
+  color: #ffffff;
+  border: 1px solid rgba(254, 202, 202, 0.3);
+}
+
+.bg-red-900 {
+  background: rgba(127, 29, 29, 0.94);
+  color: #ffffff;
+  border: 1px solid rgba(252, 165, 165, 0.3);
+}
+
+.text-contrast-fg {
+  color: #ffffff;
+}
+
+/* SVG Fill Color Rules */
+.fill-gray-1000 {
+  fill: #ffffff;
+}
+
+.fill-contrast-fg {
+  fill: #ffffff;
+}
+
+.fill-white {
+  fill: #ffffff;
+}
+
+/* Toast Buttons */
+.toast-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: background 0.2s ease, transform 0.15s ease, opacity 0.2s ease;
+  line-height: 1;
+}
+
+.toast-btn.btn-tertiary {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  padding: 5px 10px;
+}
+
+.toast-btn.btn-tertiary:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.toast-btn.btn-primary {
+  background: #ffffff;
+  border: none;
+  color: #000000;
+  font-weight: 600;
+  padding: 5px 12px;
+}
+
+.toast-btn.btn-primary:hover {
+  background: #f1f5f9;
+  transform: translateY(-1px);
+}
+
+.toast-btn.svgOnly {
+  background: transparent;
+  border: none;
+  padding: 4px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.toast-btn.svgOnly:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+.toast-btn.size-small {
+  font-size: 0.75rem;
+}
