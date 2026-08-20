@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL ||
@@ -14,25 +14,12 @@ export const createClient = (cookieStore?: {
   getAll: () => Array<{ name: string; value: string }>;
   set?: (name: string, value: string, options?: any) => void;
 }) => {
-  return createServerClient(
+  return createSupabaseClient(
     supabaseUrl,
     supabaseKey,
     {
-      cookies: {
-        getAll() {
-          return cookieStore ? cookieStore.getAll() : [];
-        },
-        setAll(cookiesToSet: Array<{ name: string; value: string; options?: any }>) {
-          try {
-            if (cookieStore?.set) {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set!(name, value, options)
-              );
-            }
-          } catch {
-            // Ignored if called where cookies cannot be mutated
-          }
-        },
+      auth: {
+        persistSession: false,
       },
     }
   );
