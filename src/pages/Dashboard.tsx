@@ -19,6 +19,7 @@ import './Dashboard.css';
 
 interface DashboardProps {
   onNavigateHome?: () => void;
+  onNavigateSignIn?: () => void;
 }
 
 interface GatewayStats {

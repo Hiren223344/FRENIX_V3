@@ -35,6 +35,8 @@ export function isSupabaseConfigured(): boolean {
   );
 }
 
+import ws from 'ws';
+
 export function getSupabaseClient(): SupabaseClient | null {
   if (!isSupabaseConfigured()) {
     return null;
@@ -46,6 +48,12 @@ export function getSupabaseClient(): SupabaseClient | null {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
+      },
+      global: {
+        fetch: fetch,
+      },
+      realtime: {
+        transport: ws,
       },
     });
   }
