@@ -35,8 +35,6 @@ export function isSupabaseConfigured(): boolean {
   );
 }
 
-import ws from 'ws';
-
 export function getSupabaseClient(): SupabaseClient | null {
   if (!isSupabaseConfigured()) {
     return null;
@@ -53,7 +51,15 @@ export function getSupabaseClient(): SupabaseClient | null {
         fetch: fetch,
       },
       realtime: {
-        transport: ws,
+        transport: class StandaloneWebSocket {
+          onopen: any = null;
+          onclose: any = null;
+          onerror: any = null;
+          onmessage: any = null;
+          readyState = 3;
+          send() {}
+          close() {}
+        } as any,
       },
     });
   }
