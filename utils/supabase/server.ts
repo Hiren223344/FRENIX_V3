@@ -12,7 +12,7 @@ const supabaseKey =
 
 export const createClient = (cookieStore?: {
   getAll: () => Array<{ name: string; value: string }>;
-  set?: (name: string, value: string, options?: unknown) => void;
+  set?: (name: string, value: string, options?: any) => void;
 }) => {
   return createServerClient(
     supabaseUrl,
@@ -22,7 +22,7 @@ export const createClient = (cookieStore?: {
         getAll() {
           return cookieStore ? cookieStore.getAll() : [];
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: Array<{ name: string; value: string; options?: any }>) {
           try {
             if (cookieStore?.set) {
               cookiesToSet.forEach(({ name, value, options }) =>

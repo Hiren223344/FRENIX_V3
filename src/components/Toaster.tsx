@@ -138,11 +138,18 @@ export const useToasts = () => {
     return toastStore.add({ ...item, type: 'error' });
   }, []);
 
+  const info = useCallback((msg: string | Message, description?: string) => {
+    mountContainer();
+    const item = typeof msg === 'string' ? { text: msg, description } : msg;
+    return toastStore.add({ ...item, type: 'info' });
+  }, []);
+
   return {
     message,
     success,
     warning,
     error,
+    info,
     remove: useCallback((id: string) => toastStore.remove(id), []),
   };
 };

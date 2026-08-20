@@ -389,7 +389,7 @@ export const SignIn: React.FC<SignInProps> = ({ onNavigateHome, onNavigateDashbo
                   type="button"
                   className="test-toast-pill"
                   onClick={() =>
-                    toastStore.message({
+                    toastStore.add({
                       text: "Workspace item archived.",
                       onUndoAction: () => toastStore.success("Item restored to workspace."),
                     })
