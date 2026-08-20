@@ -4,13 +4,14 @@ import {
   updateUserTierInDb,
   createOrGetDbUser,
 } from '../services/dbUserStore.js';
+import { getAllUsers } from '../services/userStore.js';
 import {
   getProviderKeyPoolInfo,
   addProviderKey,
   removeProviderKey,
 } from '../services/providerService.js';
 import { getUsageStatsFromRedis } from '../services/redisUsageService.js';
-import type { UserTier } from '../types/user.js';
+import type { UserTier, UserAccount } from '../types/user.js';
 
 const adminRouter = Router();
 
@@ -19,6 +20,23 @@ const ADMIN_TOKEN_SECRET = 'frenix_admin_auth_token_99x';
 
 // Simple session token tracker
 const activeAdminTokens = new Set<string>();
+
+async function getMergedAllUsers(): Promise<UserAccount[]> {
+  const dbUsers = await getAllUsersFromDb();
+  const memUsers = getAllUsers();
+  const map = new Map<string, UserAccount>();
+
+  for (const u of dbUsers) {
+    map.set(u.email.toLowerCase(), u);
+  }
+  for (const u of memUsers) {
+    if (!map.has(u.email.toLowerCase())) {
+      map.set(u.email.toLowerCase(), u);
+    }
+  }
+
+  return Array.from(map.values());
+}
 
 /**
  * Admin Authentication Middleware
@@ -62,7 +80,7 @@ adminRouter.post('/login', (req: Request, res: Response) => {
  */
 adminRouter.get('/stats', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
-    const allUsers = await getAllUsersFromDb();
+    const allUsers = await getMergedAllUsers();
     const keyPoolInfo = getProviderKeyPoolInfo();
 
     let totalRequests = 0;
@@ -104,7 +122,7 @@ adminRouter.get('/stats', adminAuthMiddleware, async (_req: Request, res: Respon
  */
 adminRouter.get('/users', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
-    const allUsers = await getAllUsersFromDb();
+    const allUsers = await getMergedAllUsers();
     const enrichedUsers = await Promise.all(
       allUsers.map(async (u) => {
         const rStats = await getUsageStatsFromRedis(u.apiKey);

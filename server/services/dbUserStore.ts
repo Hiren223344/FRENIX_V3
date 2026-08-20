@@ -269,7 +269,17 @@ export async function updateUserTierInDb(emailOrKey: string, newTier: UserTier):
 export async function getAllUsersFromDb(): Promise<UserAccount[]> {
   const usersMap = new Map<string, UserAccount>();
 
-  // 1. Load from Supabase if configured
+  // 1. From dbUsersByEmail memory map
+  for (const u of dbUsersByEmail.values()) {
+    usersMap.set(u.email.toLowerCase(), u);
+  }
+
+  // 2. From dbUsersByApiKey memory map
+  for (const u of dbUsersByApiKey.values()) {
+    usersMap.set(u.email.toLowerCase(), u);
+  }
+
+  // 3. Load from Supabase if configured
   if (isSupabaseConfigured()) {
     const supabase = getSupabaseClient();
     if (supabase) {
@@ -277,33 +287,31 @@ export async function getAllUsersFromDb(): Promise<UserAccount[]> {
         const { data } = await supabase.from('users').select('*').order('created_at', { ascending: false });
         if (data && Array.isArray(data)) {
           for (const d of data) {
-            usersMap.set(d.api_key, {
-              id: d.id,
-              email: d.email,
-              apiKey: d.api_key,
-              tier: (d.tier as UserTier) || 'free',
-              createdAt: d.created_at,
-              updatedAt: d.updated_at,
-              usage: {
-                totalRequests: 0,
-                totalCost: 0,
-                totalRequestsLeft: RATE_LIMIT_MAX_REQUESTS,
-                totalPromptTokens: 0,
-                totalCompletionTokens: 0,
-                rateLimitWindowHours: RATE_LIMIT_WINDOW_HOURS,
-                rateLimitMaxRequests: RATE_LIMIT_MAX_REQUESTS,
-              },
-              usageLogs: [],
-            });
+            const emailKey = (d.email || '').toLowerCase();
+            if (emailKey && !usersMap.has(emailKey)) {
+              usersMap.set(emailKey, {
+                id: d.id,
+                email: d.email,
+                apiKey: d.api_key,
+                tier: (d.tier as UserTier) || 'free',
+                createdAt: d.created_at,
+                updatedAt: d.updated_at,
+                usage: {
+                  totalRequests: 0,
+                  totalCost: 0,
+                  totalRequestsLeft: RATE_LIMIT_MAX_REQUESTS,
+                  totalPromptTokens: 0,
+                  totalCompletionTokens: 0,
+                  rateLimitWindowHours: RATE_LIMIT_WINDOW_HOURS,
+                  rateLimitMaxRequests: RATE_LIMIT_MAX_REQUESTS,
+                },
+                usageLogs: [],
+              });
+            }
           }
         }
       } catch {}
     }
-  }
-
-  // 2. Merge memory cache users
-  for (const u of dbUsersByApiKey.values()) {
-    usersMap.set(u.apiKey, u);
   }
 
   return Array.from(usersMap.values());
