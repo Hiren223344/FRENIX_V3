@@ -4,8 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -p \"[{name}]\" -n \"SERVER,CLIENT\" -c \"cyan.bold,green.bold\" \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:client": "vite",
+    "dev": "tsx watch server/index.ts",
     "dev:server": "tsx watch server/index.ts",
     "build": "npm run build:client && npm run build:server",
     "build:client": "tsc -b && vite build",
