@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import type { ChatCompletionRequest, ChatCompletionResponse, ModelObject } from '../types/openai.js';
 import type {
   AnthropicMessagesRequest,
