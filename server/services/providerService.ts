@@ -10,10 +10,7 @@ export const DEFAULT_PROVIDER_1_URL = 'https://opencode.ai/zen/v1';
 
 // 1. Initial Provider-1 Key Pool with Automatic Round-Robin Rotation
 export const INITIAL_PROVIDER_1_KEYS: string[] = [
-  'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bpBTaqnl2kyGcjg6GcL9PqdOX6mnH8S',
-  'sk-a3xZh5wVaJdZlMdnIf7uMX8CswUR4UJIb79LrHApLW93kbQVmWUshFK2RyZQTZ2x',
-  'sk-Y2qeo16JleKRXmeqDh4I4PqY4JO1vEmchnDXUAxKIaphzt0onXH2twzTCTgHcOCK',
-  'sk-a24WFR2BPxwJgckqE1i6QQNyPBrywGU49g8Mc5nN0EWmaHCrVPVyMet2KyZsstq1',
+  'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bp4t...',
 ];
 
 interface KeyStatus {
@@ -25,7 +22,32 @@ interface KeyStatus {
   status: 'active' | 'degraded';
 }
 
-const keyPool: KeyStatus[] = INITIAL_PROVIDER_1_KEYS.map((k) => ({
+function loadInitialKeys(): string[] {
+  // Check for comma-separated keys in .env: PROVIDER_1_API_KEYS=sk-key1,sk-key2
+  const envMulti = process.env.PROVIDER_1_API_KEYS || process.env.OPENAI_API_KEYS;
+  if (envMulti) {
+    const keys = envMulti
+      .split(',')
+      .map((k) => k.trim())
+      .filter((k) => k.startsWith('sk-'));
+    if (keys.length > 0) return keys;
+  }
+
+  // Check for single key in .env: PROVIDER_1_API_KEY=sk-...
+  const envSingle = process.env.PROVIDER_1_API_KEY || process.env.OPENAI_API_KEY;
+  if (envSingle && envSingle.trim().startsWith('sk-')) {
+    return [envSingle.trim()];
+  }
+
+  return [
+    'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bpBTaqnl2kyGcjg6GcL9PqdOX6mnH8S',
+    'sk-a3xZh5wVaJdZlMdnIf7uMX8CswUR4UJIb79LrHApLW93kbQVmWUshFK2RyZQTZ2x',
+    'sk-Y2qeo16JleKRXmeqDh4I4PqY4JO1vEmchnDXUAxKIaphzt0onXH2twzTCTgHcOCK',
+    'sk-a24WFR2BPxwJgckqE1i6QQNyPBrywGU49g8Mc5nN0EWmaHCrVPVyMet2KyZsstq1',
+  ];
+}
+
+const keyPool: KeyStatus[] = loadInitialKeys().map((k) => ({
   key: k,
   maskedKey: `${k.slice(0, 7)}...${k.slice(-6)}`,
   requestsHandled: 0,
