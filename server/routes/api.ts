@@ -102,13 +102,13 @@ router.get('/auth/me', (req: Request, res: Response) => {
 // API Key & User identity told by DB; Rate Limits & Tokens told by Redis
 router.get('/gateway/stats', async (req: Request, res: Response) => {
   const emailQuery = (req.query.email as string) || 'ghg64272@gmail.com';
-  const user = await createOrGetDbUser(undefined, emailQuery, 'pro');
+  const user = await createOrGetDbUser(undefined, emailQuery, 'free');
   const redisStats = await getUsageStatsFromRedis(user.apiKey);
 
   return res.json({
     success: true,
     email: user.email,
-    tier: user.tier ? user.tier.toUpperCase() : 'PRO',
+    tier: user.tier ? user.tier.toUpperCase() : 'FREE',
     plainKey: user.apiKey,
     keyPrefix: user.apiKey ? user.apiKey.slice(0, 16) : 'sk-live',
     stats: {
@@ -135,7 +135,7 @@ router.get('/gateway/stats', async (req: Request, res: Response) => {
 router.post('/gateway/keys', async (req: Request, res: Response) => {
   const { email, tier } = req.body;
   const userEmail = email || 'ghg64272@gmail.com';
-  const user = await createOrGetDbUser(undefined, userEmail, tier || 'pro');
+  const user = await createOrGetDbUser(undefined, userEmail, tier || 'free');
 
   return res.json({
     success: true,

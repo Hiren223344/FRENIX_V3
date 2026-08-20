@@ -141,7 +141,7 @@ v1Router.post('/user/create', async (req: Request, res: Response) => {
       });
     }
 
-    const assignedTier: UserTier = tier === 'enterprise' || tier === 'free' ? tier : 'pro';
+    const assignedTier: UserTier = tier === 'enterprise' || tier === 'pro' ? tier : 'free';
     const user = await createOrGetDbUser(preferredApiKey, email, assignedTier);
 
     return res.status(201).json({

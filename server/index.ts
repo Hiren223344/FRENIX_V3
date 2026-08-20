@@ -9,6 +9,7 @@ import { clerkMiddleware } from '@clerk/express';
 import { createServer as createViteServer } from 'vite';
 import apiRouter from './routes/api.js';
 import v1Router from './routes/v1.js';
+import adminRouter from './routes/admin.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,6 +28,8 @@ async function bootstrapServer() {
   app.use(clerkMiddleware());
 
   // Backend API Routes (Always mounted first)
+  app.use('/api/admin', adminRouter);
+  app.use('/v1/admin', adminRouter);
   app.use('/v1', v1Router);
   app.use('/api/v1', v1Router);
   app.use('/api', apiRouter);

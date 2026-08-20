@@ -38,7 +38,7 @@ export async function getUserByApiKeyFromDb(apiKey: string): Promise<UserAccount
             id: data.id || `usr_${cleanKey.substring(3, 11)}`,
             email: data.email,
             apiKey: data.api_key,
-            tier: (data.tier as UserTier) || 'pro',
+            tier: (data.tier as UserTier) || 'free',
             createdAt: data.created_at || new Date().toISOString(),
             updatedAt: data.updated_at || new Date().toISOString(),
             usage: {
@@ -89,7 +89,7 @@ export async function getUserByEmailFromDb(email: string): Promise<UserAccount |
             id: data.id,
             email: data.email,
             apiKey: data.api_key,
-            tier: (data.tier as UserTier) || 'pro',
+            tier: (data.tier as UserTier) || 'free',
             createdAt: data.created_at || new Date().toISOString(),
             updatedAt: data.updated_at || new Date().toISOString(),
             usage: {
@@ -117,12 +117,12 @@ export async function getUserByEmailFromDb(email: string): Promise<UserAccount |
 }
 
 /**
- * 3. Create or register user and API Key in DB
+ * 3. Create or register user and API Key in DB (Default Tier = free)
  */
 export async function createOrGetDbUser(
   apiKey?: string,
   email?: string,
-  tier: UserTier = 'pro'
+  tier: UserTier = 'free'
 ): Promise<UserAccount> {
   const cleanKey = apiKey?.trim();
   const cleanEmail = email?.trim().toLowerCase();
@@ -192,7 +192,7 @@ export async function createOrGetDbUser(
           updated_at: now,
         });
       } catch {
-        // Table created on migration or handled in cache
+        // Handled in cache
       }
     }
   }
@@ -201,7 +201,116 @@ export async function createOrGetDbUser(
 }
 
 /**
- * 4. DB records and stores persistent audit logs
+ * 4. Update user tier in DB and memory
+ */
+export async function updateUserTierInDb(emailOrKey: string, newTier: UserTier): Promise<UserAccount | null> {
+  const clean = emailOrKey.trim().toLowerCase();
+  let user = dbUsersByEmail.get(clean) || dbUsersByApiKey.get(emailOrKey.trim());
+
+  if (!user && isSupabaseConfigured()) {
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        const { data } = await supabase
+          .from('users')
+          .select('*')
+          .or(`email.eq.${clean},api_key.eq.${emailOrKey.trim()}`)
+          .single();
+        if (data) {
+          user = {
+            id: data.id,
+            email: data.email,
+            apiKey: data.api_key,
+            tier: newTier,
+            createdAt: data.created_at,
+            updatedAt: new Date().toISOString(),
+            usage: {
+              totalRequests: 0,
+              totalCost: 0,
+              totalRequestsLeft: RATE_LIMIT_MAX_REQUESTS,
+              totalPromptTokens: 0,
+              totalCompletionTokens: 0,
+              rateLimitWindowHours: RATE_LIMIT_WINDOW_HOURS,
+              rateLimitMaxRequests: RATE_LIMIT_MAX_REQUESTS,
+            },
+            usageLogs: [],
+          };
+        }
+      } catch {}
+    }
+  }
+
+  if (user) {
+    user.tier = newTier;
+    user.updatedAt = new Date().toISOString();
+    dbUsersByEmail.set(user.email.toLowerCase(), user);
+    dbUsersByApiKey.set(user.apiKey, user);
+
+    if (isSupabaseConfigured()) {
+      const supabase = getSupabaseClient();
+      if (supabase) {
+        try {
+          await supabase
+            .from('users')
+            .update({ tier: newTier, updated_at: user.updatedAt })
+            .eq('api_key', user.apiKey);
+        } catch {}
+      }
+    }
+    return user;
+  }
+
+  return null;
+}
+
+/**
+ * 5. Get all users for Admin Dashboard
+ */
+export async function getAllUsersFromDb(): Promise<UserAccount[]> {
+  const usersMap = new Map<string, UserAccount>();
+
+  // 1. Load from Supabase if configured
+  if (isSupabaseConfigured()) {
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        const { data } = await supabase.from('users').select('*').order('created_at', { ascending: false });
+        if (data && Array.isArray(data)) {
+          for (const d of data) {
+            usersMap.set(d.api_key, {
+              id: d.id,
+              email: d.email,
+              apiKey: d.api_key,
+              tier: (d.tier as UserTier) || 'free',
+              createdAt: d.created_at,
+              updatedAt: d.updated_at,
+              usage: {
+                totalRequests: 0,
+                totalCost: 0,
+                totalRequestsLeft: RATE_LIMIT_MAX_REQUESTS,
+                totalPromptTokens: 0,
+                totalCompletionTokens: 0,
+                rateLimitWindowHours: RATE_LIMIT_WINDOW_HOURS,
+                rateLimitMaxRequests: RATE_LIMIT_MAX_REQUESTS,
+              },
+              usageLogs: [],
+            });
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // 2. Merge memory cache users
+  for (const u of dbUsersByApiKey.values()) {
+    usersMap.set(u.apiKey, u);
+  }
+
+  return Array.from(usersMap.values());
+}
+
+/**
+ * 6. DB records and stores persistent audit logs
  */
 export async function persistUsageLogToDb(params: {
   apiKey: string;
@@ -265,7 +374,7 @@ export async function persistUsageLogToDb(params: {
 }
 
 /**
- * 5. DB retrieves recent usage audit logs
+ * 7. DB retrieves recent usage audit logs
  */
 export async function getRecentLogsFromDb(apiKey: string): Promise<UsageLog[]> {
   const cached = dbUsageLogs.get(apiKey);

@@ -5,7 +5,7 @@ export const RATE_LIMIT_MAX_REQUESTS = 800;
 export const RATE_LIMIT_WINDOW_HOURS = 5;
 export const RATE_LIMIT_WINDOW_MS = RATE_LIMIT_WINDOW_HOURS * 60 * 60 * 1000; // 18,000,000 ms
 
-// Pricing table for models
+// Pricing & Access Tier Table
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   'intelligence-evolution-v1': {
     model: 'intelligence-evolution-v1',
@@ -55,6 +55,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputCostPer1kTokens: 0.001,
     outputCostPer1kTokens: 0.005,
   },
+  // claude-opus-5 is strictly a PRO model
   'claude-opus-5': {
     model: 'claude-opus-5',
     requiredTier: 'pro',
@@ -96,12 +97,11 @@ export function generateRandomHexKey(): string {
 }
 
 /**
- * Create or retrieve user under email row
+ * Create or retrieve user under email row (Default Tier = free)
  */
-export function createUserAccount(email: string, tier: UserTier = 'pro', preferredApiKey?: string): UserAccount {
+export function createUserAccount(email: string, tier: UserTier = 'free', preferredApiKey?: string): UserAccount {
   const normalizedEmail = email.trim().toLowerCase();
 
-  // If user already exists, return existing account
   const existing = usersByEmail.get(normalizedEmail);
   if (existing) {
     if (preferredApiKey && !usersByApiKey.has(preferredApiKey)) {
@@ -140,9 +140,9 @@ export function createUserAccount(email: string, tier: UserTier = 'pro', preferr
 }
 
 /**
- * Get or register user by API key and/or email
+ * Get or register user by API key and/or email (Default Tier = free)
  */
-export function getOrCreateUser(apiKey?: string, email?: string, tier: UserTier = 'pro'): UserAccount {
+export function getOrCreateUser(apiKey?: string, email?: string, tier: UserTier = 'free'): UserAccount {
   const cleanKey = apiKey?.trim();
   if (cleanKey) {
     const existingByKey = usersByApiKey.get(cleanKey);
@@ -196,35 +196,43 @@ export function getOrCreateUser(apiKey?: string, email?: string, tier: UserTier 
   return user;
 }
 
-/**
- * Get user by email
- */
+export function updateUserTier(emailOrKey: string, tier: UserTier): UserAccount | null {
+  const clean = emailOrKey.trim().toLowerCase();
+  const user = usersByEmail.get(clean) || usersByApiKey.get(emailOrKey.trim());
+  if (user) {
+    user.tier = tier;
+    user.updatedAt = new Date().toISOString();
+    return user;
+  }
+  return null;
+}
+
+export function getAllUsers(): UserAccount[] {
+  return Array.from(usersByEmail.values());
+}
+
 export function getUserByEmail(email: string): UserAccount | undefined {
   return usersByEmail.get(email.trim().toLowerCase());
 }
 
-/**
- * Get user by API key
- */
 export function getUserByApiKey(apiKey: string): UserAccount | undefined {
-  const cleanKey = apiKey.trim();
-  return usersByApiKey.get(cleanKey);
+  return usersByApiKey.get(apiKey.trim());
 }
 
-/**
- * Check if model pricing requires Pro tier
- */
 export function getModelPricing(modelName: string): ModelPricing {
   return MODEL_PRICING[modelName] || DEFAULT_MODEL_PRICING;
 }
 
+/**
+ * Check tier access: claude-opus-5 requires Pro tier!
+ */
 export function canAccessModel(user: UserAccount, modelName: string): { allowed: boolean; reason?: string } {
   const pricing = getModelPricing(modelName);
 
   if (pricing.requiredTier === 'pro' && user.tier === 'free') {
     return {
       allowed: false,
-      reason: `Model '${modelName}' requires 'pro' tier. Current tier: 'free'. Please upgrade your tier.`,
+      reason: `Model '${modelName}' requires 'pro' tier. Your current tier is 'free'. Please contact the administrator or upgrade to Pro.`,
     };
   }
 
@@ -272,22 +280,22 @@ export function recordUserUsage(params: {
     ip,
   };
 
-  // Update user totals
-  user.usage.totalRequests += 1;
-  user.usage.totalCost = Number((user.usage.totalCost + totalCost).toFixed(6));
-  user.usage.totalPromptTokens += promptTokens;
-  user.usage.totalCompletionTokens += completionTokens;
-  user.usage.totalRequestsLeft =
-    typeof requestsRemaining === 'number'
-      ? requestsRemaining
-      : Math.max(0, RATE_LIMIT_MAX_REQUESTS - user.usage.totalRequests);
-  user.updatedAt = new Date().toISOString();
-
-  // Prepend to usageLogs (keep last 500 logs)
   user.usageLogs.unshift(log);
-  if (user.usageLogs.length > 500) {
-    user.usageLogs.pop();
+  if (user.usageLogs.length > 500) user.usageLogs.pop();
+
+  if (status === 'success') {
+    user.usage.totalRequests += 1;
+    user.usage.totalPromptTokens += promptTokens;
+    user.usage.totalCompletionTokens += completionTokens;
+    user.usage.totalCost = Number((user.usage.totalCost + totalCost).toFixed(6));
+
+    if (typeof requestsRemaining === 'number') {
+      user.usage.totalRequestsLeft = requestsRemaining;
+    } else {
+      user.usage.totalRequestsLeft = Math.max(0, user.usage.rateLimitMaxRequests - user.usage.totalRequests);
+    }
   }
 
+  user.updatedAt = new Date().toISOString();
   return log;
 }
