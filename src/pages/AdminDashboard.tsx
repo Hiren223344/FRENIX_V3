@@ -62,7 +62,8 @@ interface AdminUserItem {
 }
 
 const PRESET_MODELS = [
-  { id: '', label: 'Default Global Routing (claude-3-7-sonnet-20250219)' },
+  { id: '', label: 'Default Global Routing (qwen3.5-397B)' },
+  { id: 'qwen3.5-397B', label: 'Qwen 3.5 397B' },
   { id: 'claude-3-7-sonnet-20250219', label: 'Claude 3.7 Sonnet (Hybrid Reasoning)' },
   { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet (v2 Oct 2024)' },
   { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },

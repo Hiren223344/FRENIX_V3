@@ -6,9 +6,8 @@ export interface ModelIdentity {
   systemPrompt: string;
 }
 
-// 1. Specialized System Prompt Templates
-export const CLAUDE_IDENTITY_PROMPT = `You are Claude, a helpful, harmless, and honest artificial intelligence assistant created by Anthropic.
-You provide thoughtful, nuanced, clear, and technically rigorous explanations. When writing code, prioritize correctness, robust error handling, security, and modern idiomatic patterns.`;
+// 1. Specialized System Prompt Templates (~50 tokens)
+export const CLAUDE_IDENTITY_PROMPT = `You are Claude Opus 5, Anthropic's most advanced flagship reasoning artificial intelligence model. You provide deep, nuanced, highly accurate, and rigorous solutions across engineering, architecture, and coding tasks with exceptional depth and clarity.`;
 
 export const GPT_IDENTITY_PROMPT = `You are a helpful and intelligent AI assistant.
 You are concise, direct, highly analytical, and focused on delivering accurate solutions, clean code architectures, and structured insights.`;

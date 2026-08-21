@@ -41,6 +41,7 @@ export function getCandidateKeys(preferredKey?: string): string[] {
 
   // 3. Fallback defaults
   const defaults = [
+    'sk-Rc4f1e8T2SVgEn1U6hNrmukmLZoC9xnY1F4t44s4iOmjt8HC',
     'sk-a3xZh5wVaJdZlMdnIf7uMX8CswUR4UJIb79LrHApLW93kbQVmWUshFK2RyZQTZ2x',
     'sk-Y2qeo16JleKRXmeqDh4I4PqY4JO1vEmchnDXUAxKIaphzt0onXH2twzTCTgHcOCK',
     'sk-a24WFR2BPxwJgckqE1i6QQNyPBrywGU49g8Mc5nN0EWmaHCrVPVyMet2KyZsstq1',
@@ -54,20 +55,31 @@ export function getCandidateKeys(preferredKey?: string): string[] {
   return list;
 }
 
-// Global Default Model Routing / Aliasing Map
+// Global Default Model Routing / Aliasing Map -> Default target: qwen3.5-397B
 export const MODEL_ROUTING_MAP: Record<string, string> = {
-  'claude-opus-5': 'claude-3-7-sonnet-20250219',
-  'claude-opus-5-2025': 'claude-3-7-sonnet-20250219',
+  'claude-opus-5': 'qwen3.5-397B',
+  'claude-opus-5-2025': 'qwen3.5-397B',
+  'claude-3-7-sonnet-20250219': 'qwen3.5-397B',
+  'claude-3-5-sonnet-20241022': 'qwen3.5-397B',
+  'claude-3-5-sonnet': 'qwen3.5-397B',
+  'claude-3-opus-20240229': 'qwen3.5-397B',
+  'intelligence-evolution-v1': 'qwen3.5-397B',
+  'deepseek-v4-flash': 'qwen3.5-397B',
+  'deepseek-v4-flash-free': 'qwen3.5-397B',
+  'deepseek-chat': 'qwen3.5-397B',
+  'deepseek-reasoner': 'qwen3.5-397B',
+  'deepseek-r1': 'qwen3.5-397B',
+  'deepseek-v3': 'qwen3.5-397B',
 };
 
 // Model Fallback Map: If primary model is down or unavailable upstream, fallback automatically
 export const MODEL_FALLBACK_MAP: Record<string, string> = {
-  'deepseek-v4-flash': 'mimo-v2.5-free',
-  'deepseek-v4-flash-free': 'mimo-v2.5-free',
-  'deepseek-chat': 'mimo-v2.5-free',
-  'deepseek-reasoner': 'mimo-v2.5-free',
-  'deepseek-r1': 'mimo-v2.5-free',
-  'deepseek-v3': 'mimo-v2.5-free',
+  'deepseek-v4-flash': 'qwen3.5-397B',
+  'deepseek-v4-flash-free': 'qwen3.5-397B',
+  'deepseek-chat': 'qwen3.5-397B',
+  'deepseek-reasoner': 'qwen3.5-397B',
+  'deepseek-r1': 'qwen3.5-397B',
+  'deepseek-v3': 'qwen3.5-397B',
 };
 
 export function getFallbackModel(modelName: string): string | null {
@@ -77,9 +89,9 @@ export function getFallbackModel(modelName: string): string | null {
 
 /**
  * Resolve target model according to user configuration & routing rules
- * 1. User specific model routing map (e.g. user.customModelRouting['claude-opus-5'] = 'gpt-4o')
- * 2. User assigned model override (e.g. user.assignedModel = 'claude-3-7-sonnet-20250219')
- * 3. Global routing map
+ * 1. User specific model routing map (e.g. user.customModelRouting['claude-opus-5'] = 'qwen3.5-397B')
+ * 2. User assigned model override (e.g. user.assignedModel = 'qwen3.5-397B')
+ * 3. Global routing map (defaults to qwen3.5-397B)
  */
 export function resolveRoutedModel(requestedModel: string, user?: UserAccount | null): string {
   const normalized = (requestedModel || '').toLowerCase().trim();
@@ -91,14 +103,19 @@ export function resolveRoutedModel(requestedModel: string, user?: UserAccount | 
 
   // 2. Check user-specific assigned model override
   if (user?.assignedModel && user.assignedModel.trim()) {
-    // If requested model is a claude variant or default, route to user's assigned model
-    if (normalized.includes('claude') || normalized.includes('opus') || normalized.includes('evolution')) {
-      return user.assignedModel.trim();
-    }
+    return user.assignedModel.trim();
   }
 
   // 3. Global routing map
-  return MODEL_ROUTING_MAP[normalized] || requestedModel;
+  if (MODEL_ROUTING_MAP[normalized]) {
+    return MODEL_ROUTING_MAP[normalized];
+  }
+
+  if (normalized.includes('claude') || normalized.includes('opus') || normalized.includes('evolution')) {
+    return 'qwen3.5-397B';
+  }
+
+  return requestedModel || 'qwen3.5-397B';
 }
 
 export function getProvider1BaseUrl(): string {
