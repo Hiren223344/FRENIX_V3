@@ -134,6 +134,21 @@ export const MODEL_ROUTING_MAP: Record<string, string> = {
   'claude-opus-5-2025': 'mimo-v2.5-free',
 };
 
+// Model Fallback Map: If primary model is down, unavailable, or errors out upstream
+export const MODEL_FALLBACK_MAP: Record<string, string> = {
+  'deepseek-v4-flash': 'mimo-v2.5-free',
+  'deepseek-v4-flash-free': 'mimo-v2.5-free',
+  'deepseek-chat': 'mimo-v2.5-free',
+  'deepseek-reasoner': 'mimo-v2.5-free',
+  'deepseek-r1': 'mimo-v2.5-free',
+  'deepseek-v3': 'mimo-v2.5-free',
+};
+
+export function getFallbackModel(modelName: string): string | null {
+  const norm = (modelName || '').toLowerCase().trim();
+  return MODEL_FALLBACK_MAP[norm] || null;
+}
+
 /**
  * Resolve target model according to routing rules
  * e.g. claude-opus-5 -> mimo-v2.5-free
@@ -223,24 +238,21 @@ export function sanitizeMessages(
 }
 
 /**
- * 1. Forward OpenAI Chat Completion to Provider-1 with Dedicated Key / Key Rotation & Failover
+ * Dispatch chat completion to Provider-1 with dedicated key or key rotation
  */
-export async function forwardChatCompletionToProvider1(
-  payload: ChatCompletionRequest,
+async function attemptProvider1Completion(
+  targetModel: string,
+  messages: Array<{ role: string; content: string }>,
   preferredKey?: string
 ): Promise<ChatCompletionResponse | null> {
   const baseUrl = getProvider1BaseUrl();
-  const originalModel = payload.model;
-  const targetModel = resolveRoutedModel(payload.model);
-  const cleanMessages = sanitizeMessages(payload.messages as any, undefined, originalModel);
-
   const bodyToSend: Record<string, unknown> = {
     model: targetModel,
-    messages: cleanMessages,
+    messages,
     stream: false,
   };
 
-  // 1. If PRO user has a dedicated assigned key, dispatch directly to it
+  // 1. Try dedicated key first if assigned
   if (preferredKey && preferredKey.startsWith('sk-')) {
     try {
       const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -253,16 +265,12 @@ export async function forwardChatCompletionToProvider1(
       });
 
       if (response.ok) {
-        const data = (await response.json()) as ChatCompletionResponse;
-        return {
-          ...data,
-          model: originalModel,
-        };
-      } else if (response.status === 429 || response.status === 401) {
-        console.warn(`[Dedicated Upstream Key ${preferredKey.slice(0, 7)}... returned ${response.status}. Falling back to global key pool...]`);
+        return (await response.json()) as ChatCompletionResponse;
+      } else {
+        console.warn(`[Dedicated Key ${preferredKey.slice(0, 7)}... returned ${response.status} for model ${targetModel}. Trying key rotation pool...]`);
       }
     } catch (err) {
-      console.warn(`[Dedicated Key Network Warning]:`, err);
+      console.warn(`[Dedicated Key Network Warning for ${targetModel}]:`, err);
     }
   }
 
@@ -284,25 +292,21 @@ export async function forwardChatCompletionToProvider1(
       });
 
       if (response.ok) {
-        const data = (await response.json()) as ChatCompletionResponse;
         keyRecord.status = 'active';
-        return {
-          ...data,
-          model: originalModel,
-        };
+        return (await response.json()) as ChatCompletionResponse;
       } else {
         keyRecord.errorsCount += 1;
         if (response.status === 429 || response.status === 401) {
           keyRecord.status = 'degraded';
           console.warn(`[Key Rotation] Key ${keyRecord.maskedKey} returned HTTP ${response.status}. Rotating to next key...`);
-          continue; // Try next rotated key
+          continue;
         }
         const errorText = await response.text();
-        console.error(`[Provider-1 Error ${response.status}]:`, errorText);
+        console.warn(`[Provider-1 ${targetModel} Error ${response.status}]:`, errorText);
       }
     } catch (err: unknown) {
       keyRecord.errorsCount += 1;
-      console.warn(`[Key Rotation Network Error] with ${keyRecord.maskedKey}:`, err instanceof Error ? err.message : err);
+      console.warn(`[Key Rotation Network Error] with ${keyRecord.maskedKey} for ${targetModel}:`, err instanceof Error ? err.message : err);
     }
   }
 
@@ -310,7 +314,40 @@ export async function forwardChatCompletionToProvider1(
 }
 
 /**
- * 2. Stream OpenAI SSE Chat Completion from Provider-1 with Dedicated Key / Key Rotation
+ * 1. Forward OpenAI Chat Completion to Provider-1 with Dedicated Key, Key Rotation, and Automated Model Fallback
+ */
+export async function forwardChatCompletionToProvider1(
+  payload: ChatCompletionRequest,
+  preferredKey?: string
+): Promise<ChatCompletionResponse | null> {
+  const originalModel = payload.model;
+  const targetModel = resolveRoutedModel(payload.model);
+  const cleanMessages = sanitizeMessages(payload.messages as any, undefined, originalModel);
+
+  // 1. Initial attempt with target model
+  let result = await attemptProvider1Completion(targetModel, cleanMessages, preferredKey);
+
+  // 2. If target model failed (e.g. deepseek-v4-flash unavailable), fallback to mimo-v2.5-free automatically
+  if (!result) {
+    const fallbackModel = getFallbackModel(targetModel) || getFallbackModel(originalModel);
+    if (fallbackModel && fallbackModel !== targetModel) {
+      console.log(`[Model Fallback] Model '${targetModel}' is unavailable upstream. Automatically falling back to '${fallbackModel}'...`);
+      result = await attemptProvider1Completion(fallbackModel, cleanMessages, preferredKey);
+    }
+  }
+
+  if (result) {
+    return {
+      ...result,
+      model: originalModel,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * 2. Stream OpenAI SSE Chat Completion from Provider-1 with Dedicated Key, Key Rotation, and Automated Fallback
  */
 export async function* streamChatCompletionFromProvider1(
   payload: ChatCompletionRequest,
@@ -318,7 +355,7 @@ export async function* streamChatCompletionFromProvider1(
 ): AsyncGenerator<string, boolean, unknown> {
   const originalModel = payload.model;
 
-  // 1. Fetch live completion from Provider-1
+  // 1. Fetch live completion from Provider-1 with automated fallback
   try {
     const nonStreamResult = await forwardChatCompletionToProvider1(payload, preferredKey);
     if (nonStreamResult) {
