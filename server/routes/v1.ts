@@ -411,7 +411,7 @@ v1Router.post('/chat/completions', rateLimitMiddleware, async (req: Request, res
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders?.();
 
-      const generator = streamChatCompletion(requestPayload, rawApiKey);
+      const generator = streamChatCompletion(requestPayload, user.assignedProviderKey || rawApiKey);
 
       for await (const chunk of generator) {
         res.write(chunk);
@@ -447,7 +447,7 @@ v1Router.post('/chat/completions', rateLimitMiddleware, async (req: Request, res
     }
 
     // Handle Non-Streaming (Standard JSON response)
-    const result = await createChatCompletion(requestPayload, rawApiKey);
+    const result = await createChatCompletion(requestPayload, user.assignedProviderKey || rawApiKey);
 
     const promptTokens = result.usage?.prompt_tokens || 10;
     const completionTokens = result.usage?.completion_tokens || 10;
@@ -565,7 +565,7 @@ const handleAnthropicMessages = async (req: Request, res: Response) => {
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders?.();
 
-      const generator = streamAnthropicMessage(requestPayload, rawApiKey, anthropicVersion);
+      const generator = streamAnthropicMessage(requestPayload, user.assignedProviderKey || rawApiKey, anthropicVersion);
 
       for await (const chunk of generator) {
         res.write(chunk);
@@ -601,7 +601,7 @@ const handleAnthropicMessages = async (req: Request, res: Response) => {
     }
 
     // Handle Non-Streaming
-    const result = await createAnthropicMessage(requestPayload, rawApiKey, anthropicVersion);
+    const result = await createAnthropicMessage(requestPayload, user.assignedProviderKey || rawApiKey, anthropicVersion);
 
     const promptTokens = result.usage?.input_tokens || 10;
     const completionTokens = result.usage?.output_tokens || 10;

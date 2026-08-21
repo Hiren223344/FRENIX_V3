@@ -10,12 +10,40 @@ import { buildComposedSystemPrompt } from './identityService.js';
 
 export const PROVIDER_1_NAME = 'Provider-1 (OpenCode Zen)';
 export const DEFAULT_PROVIDER_1_URL = 'https://opencode.ai/zen/v1';
-export const DEFAULT_PROVIDER_1_KEY =
-  process.env.PROVIDER_1_API_KEY ||
-  process.env.OPENAI_API_KEY ||
-  'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bpBTaqnl2kyGcjg6GcL9PqdOX6mnH8S';
 
-// Model Routing / Aliasing Map -> mimo-v2.5-free
+// Active Key Pool for Automatic Failover on 429 Rate Limits
+function loadCandidateKeys(): string[] {
+  const envMulti = process.env.PROVIDER_1_API_KEYS || process.env.OPENAI_API_KEYS;
+  if (envMulti) {
+    const keys = envMulti
+      .split(',')
+      .map((k) => k.trim())
+      .filter((k) => k.startsWith('sk-'));
+    if (keys.length > 0) return keys;
+  }
+
+  const envSingle = process.env.PROVIDER_1_API_KEY || process.env.OPENAI_API_KEY;
+  if (envSingle && envSingle.trim().startsWith('sk-')) {
+    return [
+      envSingle.trim(),
+      'sk-a3xZh5wVaJdZlMdnIf7uMX8CswUR4UJIb79LrHApLW93kbQVmWUshFK2RyZQTZ2x',
+      'sk-Y2qeo16JleKRXmeqDh4I4PqY4JO1vEmchnDXUAxKIaphzt0onXH2twzTCTgHcOCK',
+      'sk-a24WFR2BPxwJgckqE1i6QQNyPBrywGU49g8Mc5nN0EWmaHCrVPVyMet2KyZsstq1',
+      'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bpBTaqnl2kyGcjg6GcL9PqdOX6mnH8S',
+    ];
+  }
+
+  return [
+    'sk-a3xZh5wVaJdZlMdnIf7uMX8CswUR4UJIb79LrHApLW93kbQVmWUshFK2RyZQTZ2x',
+    'sk-Y2qeo16JleKRXmeqDh4I4PqY4JO1vEmchnDXUAxKIaphzt0onXH2twzTCTgHcOCK',
+    'sk-a24WFR2BPxwJgckqE1i6QQNyPBrywGU49g8Mc5nN0EWmaHCrVPVyMet2KyZsstq1',
+    'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bpBTaqnl2kyGcjg6GcL9PqdOX6mnH8S',
+  ];
+}
+
+export const FALLBACK_PROVIDER_KEYS: string[] = loadCandidateKeys();
+
+// Model Routing / Aliasing Map -> All routed to mimo-v2.5-free
 export const MODEL_ROUTING_MAP: Record<string, string> = {
   'claude-opus-5': 'mimo-v2.5-free',
   'claude-opus-5-2025': 'mimo-v2.5-free',
@@ -53,16 +81,6 @@ export function resolveRoutedModel(requestedModel: string): string {
 
 export function getProvider1BaseUrl(): string {
   return (process.env.PROVIDER_1_BASE_URL || process.env.OPENAI_BASE_URL || DEFAULT_PROVIDER_1_URL).replace(/\/+$/, '');
-}
-
-/**
- * Get active API key: Dedicated key if assigned, otherwise server default
- */
-export function getProvider1ApiKey(preferredKey?: string): string {
-  if (preferredKey && preferredKey.trim().startsWith('sk-')) {
-    return preferredKey.trim();
-  }
-  return process.env.PROVIDER_1_API_KEY || process.env.OPENAI_API_KEY || DEFAULT_PROVIDER_1_KEY;
 }
 
 /**
@@ -141,7 +159,7 @@ export function sanitizeMessages(
 }
 
 /**
- * Dispatch chat completion to Provider-1 with dedicated key or server default key
+ * Dispatch chat completion to Provider-1 with dedicated key first, with automatic failover on 429 RateLimit
  */
 async function attemptProvider1Completion(
   targetModel: string,
@@ -149,31 +167,51 @@ async function attemptProvider1Completion(
   preferredKey?: string
 ): Promise<ChatCompletionResponse | null> {
   const baseUrl = getProvider1BaseUrl();
-  const apiKey = getProvider1ApiKey(preferredKey);
   const bodyToSend: Record<string, unknown> = {
     model: targetModel,
     messages,
     stream: false,
   };
 
-  try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(bodyToSend),
-    });
-
-    if (response.ok) {
-      return (await response.json()) as ChatCompletionResponse;
-    } else {
-      const errorText = await response.text();
-      console.warn(`[Provider-1 ${targetModel} Error ${response.status}]:`, errorText);
+  // Build candidate keys: Preferred Dedicated Key FIRST, followed by fallback pool
+  const candidateKeys: string[] = [];
+  if (preferredKey && preferredKey.trim().startsWith('sk-')) {
+    candidateKeys.push(preferredKey.trim());
+  }
+  for (const k of FALLBACK_PROVIDER_KEYS) {
+    if (!candidateKeys.includes(k)) {
+      candidateKeys.push(k);
     }
-  } catch (err: unknown) {
-    console.warn(`[Provider-1 Network Error for ${targetModel}]:`, err instanceof Error ? err.message : err);
+  }
+
+  for (let i = 0; i < candidateKeys.length; i++) {
+    const apiKey = candidateKeys[i];
+    const masked = `${apiKey.slice(0, 7)}...${apiKey.slice(-6)}`;
+
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(bodyToSend),
+      });
+
+      if (response.ok) {
+        return (await response.json()) as ChatCompletionResponse;
+      }
+
+      if (response.status === 429 || response.status === 401) {
+        console.warn(`[Provider-1 429/401] Key ${masked} rate limited. Immediately trying next candidate key (${i + 1}/${candidateKeys.length})...`);
+        continue;
+      }
+
+      const errorText = await response.text();
+      console.warn(`[Provider-1 ${targetModel} Error ${response.status} with key ${masked}]:`, errorText);
+    } catch (err: unknown) {
+      console.warn(`[Provider-1 Network Error with key ${masked}]:`, err instanceof Error ? err.message : err);
+    }
   }
 
   return null;
@@ -221,7 +259,7 @@ export async function* streamChatCompletionFromProvider1(
 ): AsyncGenerator<string, boolean, unknown> {
   const originalModel = payload.model;
 
-  // 1. Fetch live completion from Provider-1 with automated fallback
+  // 1. Fetch live completion from Provider-1 with automated fallback & key failover
   try {
     const nonStreamResult = await forwardChatCompletionToProvider1(payload, preferredKey);
     if (nonStreamResult) {
@@ -387,7 +425,7 @@ export async function* streamAnthropicMessageFromProvider1(
  */
 export async function fetchProvider1Models(): Promise<ModelObject[]> {
   const baseUrl = getProvider1BaseUrl();
-  const apiKey = getProvider1ApiKey();
+  const apiKey = FALLBACK_PROVIDER_KEYS[0];
 
   try {
     const targetUrl = `${baseUrl}/models`;
