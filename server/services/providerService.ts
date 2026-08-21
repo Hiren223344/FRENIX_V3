@@ -10,123 +10,10 @@ import { buildComposedSystemPrompt } from './identityService.js';
 
 export const PROVIDER_1_NAME = 'Provider-1 (OpenCode Zen)';
 export const DEFAULT_PROVIDER_1_URL = 'https://opencode.ai/zen/v1';
-
-// 1. Initial Provider-1 Key Pool with Automatic Round-Robin Rotation
-export const INITIAL_PROVIDER_1_KEYS: string[] = [
-  'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bp4t...',
-];
-
-interface KeyStatus {
-  key: string;
-  maskedKey: string;
-  requestsHandled: number;
-  errorsCount: number;
-  lastUsed: string | null;
-  status: 'active' | 'degraded';
-}
-
-function loadInitialKeys(): string[] {
-  // Check for comma-separated keys in .env: PROVIDER_1_API_KEYS=sk-key1,sk-key2
-  const envMulti = process.env.PROVIDER_1_API_KEYS || process.env.OPENAI_API_KEYS;
-  if (envMulti) {
-    const keys = envMulti
-      .split(',')
-      .map((k) => k.trim())
-      .filter((k) => k.startsWith('sk-'));
-    if (keys.length > 0) return keys;
-  }
-
-  // Check for single key in .env: PROVIDER_1_API_KEY=sk-...
-  const envSingle = process.env.PROVIDER_1_API_KEY || process.env.OPENAI_API_KEY;
-  if (envSingle && envSingle.trim().startsWith('sk-')) {
-    return [envSingle.trim()];
-  }
-
-  return [
-    'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bpBTaqnl2kyGcjg6GcL9PqdOX6mnH8S',
-    'sk-a3xZh5wVaJdZlMdnIf7uMX8CswUR4UJIb79LrHApLW93kbQVmWUshFK2RyZQTZ2x',
-    'sk-Y2qeo16JleKRXmeqDh4I4PqY4JO1vEmchnDXUAxKIaphzt0onXH2twzTCTgHcOCK',
-    'sk-a24WFR2BPxwJgckqE1i6QQNyPBrywGU49g8Mc5nN0EWmaHCrVPVyMet2KyZsstq1',
-  ];
-}
-
-const keyPool: KeyStatus[] = loadInitialKeys().map((k) => ({
-  key: k,
-  maskedKey: `${k.slice(0, 7)}...${k.slice(-6)}`,
-  requestsHandled: 0,
-  errorsCount: 0,
-  lastUsed: null,
-  status: 'active',
-}));
-
-let currentKeyIndex = 0;
-
-export function addProviderKey(newKey: string): boolean {
-  const clean = newKey.trim();
-  if (!clean || !clean.startsWith('sk-') || clean.length < 20) return false;
-  const exists = keyPool.some((k) => k.key === clean);
-  if (!exists) {
-    keyPool.push({
-      key: clean,
-      maskedKey: `${clean.slice(0, 7)}...${clean.slice(-6)}`,
-      requestsHandled: 0,
-      errorsCount: 0,
-      lastUsed: null,
-      status: 'active',
-    });
-    return true;
-  }
-  return false;
-}
-
-export function removeProviderKey(keyToRemove: string): boolean {
-  const clean = keyToRemove.trim();
-  const index = keyPool.findIndex((k) => k.key === clean || k.maskedKey === clean);
-  if (index >= 0 && keyPool.length > 1) {
-    keyPool.splice(index, 1);
-    if (currentKeyIndex >= keyPool.length) {
-      currentKeyIndex = 0;
-    }
-    return true;
-  }
-  return false;
-}
-
-export function getProviderKeyPoolInfo(): {
-  totalKeys: number;
-  currentIndex: number;
-  keys: KeyStatus[];
-} {
-  return {
-    totalKeys: keyPool.length,
-    currentIndex: currentKeyIndex,
-    keys: keyPool.map((k) => ({ ...k })),
-  };
-}
-
-/**
- * Get next rotated key in round-robin order
- */
-export function getNextRotatedKey(): KeyStatus {
-  if (keyPool.length === 0) {
-    return {
-      key: INITIAL_PROVIDER_1_KEYS[0],
-      maskedKey: 'sk-tubt...6mnH8S',
-      requestsHandled: 0,
-      errorsCount: 0,
-      lastUsed: new Date().toISOString(),
-      status: 'active',
-    };
-  }
-
-  const selected = keyPool[currentKeyIndex];
-  selected.requestsHandled += 1;
-  selected.lastUsed = new Date().toISOString();
-
-  // Advance index for next call
-  currentKeyIndex = (currentKeyIndex + 1) % keyPool.length;
-  return selected;
-}
+export const DEFAULT_PROVIDER_1_KEY =
+  process.env.PROVIDER_1_API_KEY ||
+  process.env.OPENAI_API_KEY ||
+  'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bpBTaqnl2kyGcjg6GcL9PqdOX6mnH8S';
 
 // Model Routing / Aliasing Map
 export const MODEL_ROUTING_MAP: Record<string, string> = {
@@ -134,7 +21,7 @@ export const MODEL_ROUTING_MAP: Record<string, string> = {
   'claude-opus-5-2025': 'mimo-v2.5-free',
 };
 
-// Model Fallback Map: If primary model is down, unavailable, or errors out upstream
+// Model Fallback Map: If primary model is down or unavailable upstream, fallback automatically
 export const MODEL_FALLBACK_MAP: Record<string, string> = {
   'deepseek-v4-flash': 'mimo-v2.5-free',
   'deepseek-v4-flash-free': 'mimo-v2.5-free',
@@ -160,6 +47,16 @@ export function resolveRoutedModel(requestedModel: string): string {
 
 export function getProvider1BaseUrl(): string {
   return (process.env.PROVIDER_1_BASE_URL || process.env.OPENAI_BASE_URL || DEFAULT_PROVIDER_1_URL).replace(/\/+$/, '');
+}
+
+/**
+ * Get active API key: Dedicated key if assigned, otherwise server default
+ */
+export function getProvider1ApiKey(preferredKey?: string): string {
+  if (preferredKey && preferredKey.trim().startsWith('sk-')) {
+    return preferredKey.trim();
+  }
+  return process.env.PROVIDER_1_API_KEY || process.env.OPENAI_API_KEY || DEFAULT_PROVIDER_1_KEY;
 }
 
 /**
@@ -217,7 +114,7 @@ export function sanitizeMessages(
 
   // Append user & assistant conversation messages
   for (const m of messages || []) {
-    if (m.role === 'system') continue; // Handled above in composed system prompt
+    if (m.role === 'system') continue;
     const text = extractCleanText(m.content).trim();
     if (text) {
       result.push({
@@ -238,7 +135,7 @@ export function sanitizeMessages(
 }
 
 /**
- * Dispatch chat completion to Provider-1 with dedicated key or key rotation
+ * Dispatch chat completion to Provider-1 with dedicated key or server default key
  */
 async function attemptProvider1Completion(
   targetModel: string,
@@ -246,75 +143,38 @@ async function attemptProvider1Completion(
   preferredKey?: string
 ): Promise<ChatCompletionResponse | null> {
   const baseUrl = getProvider1BaseUrl();
+  const apiKey = getProvider1ApiKey(preferredKey);
   const bodyToSend: Record<string, unknown> = {
     model: targetModel,
     messages,
     stream: false,
   };
 
-  // 1. Try dedicated key first if assigned
-  if (preferredKey && preferredKey.startsWith('sk-')) {
-    try {
-      const response = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${preferredKey}`,
-        },
-        body: JSON.stringify(bodyToSend),
-      });
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(bodyToSend),
+    });
 
-      if (response.ok) {
-        return (await response.json()) as ChatCompletionResponse;
-      } else {
-        console.warn(`[Dedicated Key ${preferredKey.slice(0, 7)}... returned ${response.status} for model ${targetModel}. Trying key rotation pool...]`);
-      }
-    } catch (err) {
-      console.warn(`[Dedicated Key Network Warning for ${targetModel}]:`, err);
+    if (response.ok) {
+      return (await response.json()) as ChatCompletionResponse;
+    } else {
+      const errorText = await response.text();
+      console.warn(`[Provider-1 ${targetModel} Error ${response.status}]:`, errorText);
     }
-  }
-
-  // 2. Global Key Rotation Pool with automatic failover
-  const maxAttempts = Math.min(3, keyPool.length);
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const keyRecord = getNextRotatedKey();
-    const targetUrl = `${baseUrl}/chat/completions`;
-
-    try {
-      const response = await fetch(targetUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${keyRecord.key}`,
-        },
-        body: JSON.stringify(bodyToSend),
-      });
-
-      if (response.ok) {
-        keyRecord.status = 'active';
-        return (await response.json()) as ChatCompletionResponse;
-      } else {
-        keyRecord.errorsCount += 1;
-        if (response.status === 429 || response.status === 401) {
-          keyRecord.status = 'degraded';
-          console.warn(`[Key Rotation] Key ${keyRecord.maskedKey} returned HTTP ${response.status}. Rotating to next key...`);
-          continue;
-        }
-        const errorText = await response.text();
-        console.warn(`[Provider-1 ${targetModel} Error ${response.status}]:`, errorText);
-      }
-    } catch (err: unknown) {
-      keyRecord.errorsCount += 1;
-      console.warn(`[Key Rotation Network Error] with ${keyRecord.maskedKey} for ${targetModel}:`, err instanceof Error ? err.message : err);
-    }
+  } catch (err: unknown) {
+    console.warn(`[Provider-1 Network Error for ${targetModel}]:`, err instanceof Error ? err.message : err);
   }
 
   return null;
 }
 
 /**
- * 1. Forward OpenAI Chat Completion to Provider-1 with Dedicated Key, Key Rotation, and Automated Model Fallback
+ * 1. Forward OpenAI Chat Completion to Provider-1 with Dedicated Key and Automated Model Fallback
  */
 export async function forwardChatCompletionToProvider1(
   payload: ChatCompletionRequest,
@@ -347,7 +207,7 @@ export async function forwardChatCompletionToProvider1(
 }
 
 /**
- * 2. Stream OpenAI SSE Chat Completion from Provider-1 with Dedicated Key, Key Rotation, and Automated Fallback
+ * 2. Stream OpenAI SSE Chat Completion from Provider-1 with Dedicated Key and Automated Fallback
  */
 export async function* streamChatCompletionFromProvider1(
   payload: ChatCompletionRequest,
@@ -405,7 +265,7 @@ export async function* streamChatCompletionFromProvider1(
 }
 
 /**
- * 3. Forward Anthropic Messages request to Provider-1 with Dedicated Key / Key Rotation
+ * 3. Forward Anthropic Messages request to Provider-1 with Dedicated Key
  */
 export async function forwardAnthropicMessageToProvider1(
   payload: AnthropicMessagesRequest,
@@ -443,7 +303,7 @@ export async function forwardAnthropicMessageToProvider1(
 }
 
 /**
- * 4. Stream Anthropic Messages from Provider-1 with Dedicated Key / Key Rotation
+ * 4. Stream Anthropic Messages from Provider-1 with Dedicated Key & Model Routing
  */
 export async function* streamAnthropicMessageFromProvider1(
   payload: AnthropicMessagesRequest,
@@ -517,17 +377,17 @@ export async function* streamAnthropicMessageFromProvider1(
 }
 
 /**
- * 5. Fetch Models list dynamically from Provider-1 using Key Rotation
+ * 5. Fetch Models list dynamically from Provider-1
  */
 export async function fetchProvider1Models(): Promise<ModelObject[]> {
   const baseUrl = getProvider1BaseUrl();
-  const keyRecord = getNextRotatedKey();
+  const apiKey = getProvider1ApiKey();
 
   try {
     const targetUrl = `${baseUrl}/models`;
     const response = await fetch(targetUrl, {
       headers: {
-        Authorization: `Bearer ${keyRecord.key}`,
+        Authorization: `Bearer ${apiKey}`,
       },
     });
 

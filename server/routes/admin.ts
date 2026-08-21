@@ -6,11 +6,6 @@ import {
   assignProviderKeyToUser,
 } from '../services/dbUserStore.js';
 import { getAllUsers } from '../services/userStore.js';
-import {
-  getProviderKeyPoolInfo,
-  addProviderKey,
-  removeProviderKey,
-} from '../services/providerService.js';
 import { getUsageStatsFromRedis } from '../services/redisUsageService.js';
 import type { UserTier, UserAccount } from '../types/user.js';
 
@@ -82,17 +77,19 @@ adminRouter.post('/login', (req: Request, res: Response) => {
 adminRouter.get('/stats', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     const allUsers = await getMergedAllUsers();
-    const keyPoolInfo = getProviderKeyPoolInfo();
 
     let totalRequests = 0;
     let totalTokens = 0;
     let totalCostUsd = 0;
     let proCount = 0;
     let freeCount = 0;
+    let dedicatedKeysCount = 0;
 
     for (const u of allUsers) {
       if (u.tier === 'pro' || u.tier === 'enterprise') proCount++;
       else freeCount++;
+
+      if (u.assignedProviderKey) dedicatedKeysCount++;
 
       const rStats = await getUsageStatsFromRedis(u.apiKey);
       totalRequests += rStats.usage.totalRequests;
@@ -109,7 +106,7 @@ adminRouter.get('/stats', adminAuthMiddleware, async (_req: Request, res: Respon
         totalRequests,
         totalTokens,
         totalCostUsd: Number(totalCostUsd.toFixed(4)),
-        providerKeysCount: keyPoolInfo.totalKeys,
+        dedicatedKeysCount,
       },
     });
   } catch (err: unknown) {
@@ -179,7 +176,7 @@ adminRouter.post('/users/assign-key', adminAuthMiddleware, async (req: Request, 
       success: true,
       message: providerKey
         ? `Dedicated OpenCode key '${providerKey.slice(0, 7)}...${providerKey.slice(-6)}' assigned to ${updated.email}.`
-        : `Dedicated key removed. User ${updated.email} reverted to global key rotation pool.`,
+        : `Dedicated key removed. User ${updated.email} reverted to default server key.`,
       user: {
         id: updated.id,
         email: updated.email,
@@ -196,7 +193,7 @@ adminRouter.post('/users/assign-key', adminAuthMiddleware, async (req: Request, 
 });
 
 /**
- * 4. POST /api/admin/users/tier — Change user tier to 'pro', 'free', 'enterprise'
+ * 5. POST /api/admin/users/tier — Change user tier to 'pro', 'free', 'enterprise'
  */
 adminRouter.post('/users/tier', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
@@ -236,7 +233,7 @@ adminRouter.post('/users/tier', adminAuthMiddleware, async (req: Request, res: R
 });
 
 /**
- * 5. POST /api/admin/users/create — Create user with custom tier
+ * 6. POST /api/admin/users/create — Create user with custom tier
  */
 adminRouter.post('/users/create', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
@@ -257,65 +254,6 @@ adminRouter.post('/users/create', adminAuthMiddleware, async (req: Request, res:
     const message = err instanceof Error ? err.message : 'Error creating user';
     return res.status(500).json({ success: false, error: message });
   }
-});
-
-/**
- * 6. GET /api/admin/keys — Key Rotation Pool Monitor
- */
-adminRouter.get('/keys', adminAuthMiddleware, (_req: Request, res: Response) => {
-  const pool = getProviderKeyPoolInfo();
-  return res.json({
-    success: true,
-    keyPool: pool,
-  });
-});
-
-/**
- * 7. POST /api/admin/keys/add — Add new key to rotation pool
- */
-adminRouter.post('/keys/add', adminAuthMiddleware, (req: Request, res: Response) => {
-  const { key } = req.body;
-  if (!key || typeof key !== 'string') {
-    return res.status(400).json({ success: false, error: "Valid 'key' string required." });
-  }
-
-  const added = addProviderKey(key);
-  if (!added) {
-    return res.status(400).json({
-      success: false,
-      error: 'Key already exists or invalid format (must start with sk- and be at least 20 chars).',
-    });
-  }
-
-  return res.json({
-    success: true,
-    message: 'New key added to active round-robin rotation pool.',
-    keyPool: getProviderKeyPoolInfo(),
-  });
-});
-
-/**
- * 8. DELETE /api/admin/keys — Remove key from rotation pool
- */
-adminRouter.delete('/keys', adminAuthMiddleware, (req: Request, res: Response) => {
-  const { key } = req.body;
-  if (!key) {
-    return res.status(400).json({ success: false, error: 'Key is required.' });
-  }
-
-  const removed = removeProviderKey(key);
-  if (!removed) {
-    return res.status(400).json({
-      success: false,
-      error: 'Cannot remove key (either not found or only 1 key remaining in pool).',
-    });
-  }
-
-  return res.json({
-    success: true,
-    message: 'Key removed from rotation pool.',
-    keyPool: getProviderKeyPoolInfo(),
-  });
 });
 
 export default adminRouter;

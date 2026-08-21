@@ -5,7 +5,6 @@ import {
   KeyRound,
   RotateCw,
   Plus,
-  Trash2,
   Search,
   CheckCircle,
   Copy,
@@ -13,8 +12,6 @@ import {
   Zap,
   Activity,
   Layers,
-  DollarSign,
-  UserCheck,
   Link2,
   Unlink2,
 } from 'lucide-react';
@@ -33,7 +30,7 @@ interface AdminStats {
   totalRequests: number;
   totalTokens: number;
   totalCostUsd: number;
-  providerKeysCount: number;
+  dedicatedKeysCount: number;
 }
 
 interface AdminUserItem {
@@ -61,15 +58,6 @@ interface AdminUserItem {
   };
 }
 
-interface KeyPoolItem {
-  key: string;
-  maskedKey: string;
-  requestsHandled: number;
-  errorsCount: number;
-  lastUsed: string | null;
-  status: 'active' | 'degraded';
-}
-
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onNavigateHome,
   onNavigateLogin,
@@ -83,20 +71,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     totalRequests: 0,
     totalTokens: 0,
     totalCostUsd: 0,
-    providerKeysCount: 0,
+    dedicatedKeysCount: 0,
   });
 
   const [users, setUsers] = useState<AdminUserItem[]>([]);
-  const [keyPool, setKeyPool] = useState<{ totalKeys: number; currentIndex: number; keys: KeyPoolItem[] }>({
-    totalKeys: 0,
-    currentIndex: 0,
-    keys: [],
-  });
-
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [newKeyInput, setNewKeyInput] = useState('');
-  const [addingKey, setAddingKey] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // New user form state
@@ -106,7 +86,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Dedicated Key Assignment Modal state
   const [assignUserModal, setAssignUserModal] = useState<AdminUserItem | null>(null);
-  const [selectedAssignKey, setSelectedAssignKey] = useState<string>('');
   const [customAssignKey, setCustomAssignKey] = useState<string>('');
   const [assigning, setAssigning] = useState<boolean>(false);
 
@@ -142,13 +121,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (usersRes.ok) {
         const usersData = await usersRes.json();
         if (usersData.users) setUsers(usersData.users);
-      }
-
-      // 3. Fetch Keys
-      const keysRes = await fetch('/api/admin/keys', { headers });
-      if (keysRes.ok) {
-        const keysData = await keysRes.json();
-        if (keysData.keyPool) setKeyPool(keysData.keyPool);
       }
     } catch {
       toasts.error('Failed to load admin telemetry.');
@@ -196,7 +168,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     if (!assignUserModal) return;
 
-    const keyToAssign = customAssignKey.trim() || selectedAssignKey.trim();
+    const keyToAssign = customAssignKey.trim();
+    if (!keyToAssign.startsWith('sk-')) {
+      toasts.warning("Dedicated OpenCode key must start with 'sk-'.");
+      return;
+    }
+
     const token = getAdminToken();
 
     try {
@@ -217,7 +194,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (res.ok) {
         toasts.success(data.message);
         setAssignUserModal(null);
-        setSelectedAssignKey('');
         setCustomAssignKey('');
         loadAdminData();
       } else {
@@ -230,7 +206,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Remove Dedicated Key (Revert to pool)
+  // Remove Dedicated Key (Revert to default)
   const handleRemoveAssignedKey = async (userEmail: string) => {
     const token = getAdminToken();
     try {
@@ -255,66 +231,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
     } catch {
       toasts.error('Network error unassigning key.');
-    }
-  };
-
-  // Add Key to Rotation Pool
-  const handleAddKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newKeyInput.trim().startsWith('sk-')) {
-      toasts.warning("Key must start with 'sk-'.");
-      return;
-    }
-
-    const token = getAdminToken();
-    try {
-      setAddingKey(true);
-      const res = await fetch('/api/admin/keys/add', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': token,
-        },
-        body: JSON.stringify({ key: newKeyInput.trim() }),
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        toasts.success('Provider Key added to active rotation pool!');
-        setNewKeyInput('');
-        if (data.keyPool) setKeyPool(data.keyPool);
-      } else {
-        toasts.error(data.error || 'Failed to add key.');
-      }
-    } catch {
-      toasts.error('Network error adding key.');
-    } finally {
-      setAddingKey(false);
-    }
-  };
-
-  // Remove Key from Pool
-  const handleRemoveKey = async (key: string) => {
-    const token = getAdminToken();
-    try {
-      const res = await fetch('/api/admin/keys', {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': token,
-        },
-        body: JSON.stringify({ key }),
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        toasts.success('Key removed from rotation pool.');
-        if (data.keyPool) setKeyPool(data.keyPool);
-      } else {
-        toasts.error(data.error || 'Cannot remove key.');
-      }
-    } catch {
-      toasts.error('Network error removing key.');
     }
   };
 
@@ -427,6 +343,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           <div className="adm-kpi-card">
             <div className="adm-kpi-header">
+              <span className="adm-kpi-label">Dedicated Upstream Keys</span>
+              <KeyRound size={16} className="text-white/70" />
+            </div>
+            <div className="adm-kpi-value">{stats.dedicatedKeysCount} Assigned</div>
+            <div className="adm-kpi-sub">Isolated limits per Pro account</div>
+          </div>
+
+          <div className="adm-kpi-card">
+            <div className="adm-kpi-header">
               <span className="adm-kpi-label">Total Requests</span>
               <Activity size={16} className="text-white/70" />
             </div>
@@ -442,26 +367,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="adm-kpi-value">{stats.totalTokens.toLocaleString()}</div>
             <div className="adm-kpi-sub">{(stats.totalTokens / 1000).toFixed(1)}k tokens aggregate</div>
           </div>
-
-          <div className="adm-kpi-card">
-            <div className="adm-kpi-header">
-              <span className="adm-kpi-label">Key Rotation Pool</span>
-              <KeyRound size={16} className="text-white/70" />
-            </div>
-            <div className="adm-kpi-value">{keyPool.totalKeys} Keys</div>
-            <div className="adm-kpi-sub">Dedicated &amp; Pool Failover Active</div>
-          </div>
         </section>
 
-        {/* Main Deck: Users Management & Key Pool */}
-        <div className="adm-deck-grid">
-          {/* 1. User Management & Tier Upgrade Section */}
+        {/* Main Deck: Full Width Users & Dedicated Key Binding */}
+        <div className="adm-deck-single">
           <section className="adm-deck-card adm-users-card">
             <div className="adm-deck-header">
               <div>
-                <h2 className="adm-deck-title">User Accounts &amp; Dedicated Key Binding</h2>
+                <h2 className="adm-deck-title">User Accounts &amp; Dedicated Upstream Key Binding</h2>
                 <p className="adm-deck-sub">
-                  Assign 1 dedicated OpenCode upstream key per PRO user so they never hit limits from the shared pool.
+                  Assign 1 dedicated OpenCode key to each PRO user so they enjoy full upstream limits without sharing capacity.
                 </p>
               </div>
 
@@ -496,15 +411,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <th>User / Email</th>
                     <th>Client API Key</th>
                     <th>Current Tier</th>
-                    <th>Upstream Key</th>
+                    <th>Dedicated Upstream Key</th>
                     <th>Requests</th>
+                    <th>Tokens</th>
                     <th style={{ textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredUsers.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="adm-empty-td">
+                      <td colSpan={7} className="adm-empty-td">
                         No users found matching your search.
                       </td>
                     </tr>
@@ -544,26 +460,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 type="button"
                                 onClick={() => handleRemoveAssignedKey(u.email)}
                                 className="adm-unlink-btn"
-                                title="Unbind dedicated key (revert to global pool)"
+                                title="Unbind dedicated key (revert to default)"
                               >
                                 <Unlink2 size={12} />
                               </button>
                             </div>
                           ) : (
                             <span className="adm-pool-badge">
-                              Global Pool
+                              Default Server Key
                             </span>
                           )}
                         </td>
                         <td>{u.usage?.totalRequests || 0}</td>
+                        <td>{(u.usage?.tokens?.total || 0).toLocaleString()}</td>
                         <td>
                           <div className="adm-tier-btn-group">
                             <button
                               type="button"
                               onClick={() => {
                                 setAssignUserModal(u);
-                                setSelectedAssignKey(u.assignedProviderKey || keyPool.keys[0]?.key || '');
-                                setCustomAssignKey('');
+                                setCustomAssignKey(u.assignedProviderKey || '');
                               }}
                               className="adm-tier-btn adm-btn-keybind"
                               title="Assign 1 Dedicated OpenCode Upstream Key to this User"
@@ -596,70 +512,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </table>
             </div>
           </section>
-
-          {/* 2. Provider Key Rotation Pool Monitor */}
-          <section className="adm-deck-card adm-keys-card">
-            <div className="adm-deck-header">
-              <div>
-                <h2 className="adm-deck-title">Upstream Key Rotation Pool</h2>
-                <p className="adm-deck-sub">
-                  Provider-1 (OpenCode Zen) keys cycled in round-robin or assigned individually to Pro accounts.
-                </p>
-              </div>
-            </div>
-
-            {/* Add Key Form */}
-            <form onSubmit={handleAddKey} className="adm-add-key-form">
-              <input
-                type="text"
-                value={newKeyInput}
-                onChange={(e) => setNewKeyInput(e.target.value)}
-                placeholder="Add new upstream key (sk-...)"
-                className="adm-key-input"
-              />
-              <button
-                type="submit"
-                disabled={addingKey || !newKeyInput}
-                className="adm-btn adm-btn-primary"
-              >
-                <Plus size={14} />
-                <span>{addingKey ? 'Adding...' : 'Add Key'}</span>
-              </button>
-            </form>
-
-            {/* Active Keys List */}
-            <div className="adm-keys-list">
-              {keyPool.keys.map((k, idx) => (
-                <div key={k.key} className="adm-key-item">
-                  <div className="adm-key-left">
-                    <span className="adm-key-num">#{idx + 1}</span>
-                    <div>
-                      <div className="adm-key-masked">{k.maskedKey}</div>
-                      <div className="adm-key-meta">
-                        Requests: {k.requestsHandled} · Errors: {k.errorsCount}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="adm-key-right">
-                    <span className={`adm-status-badge adm-status-${k.status}`}>
-                      {k.status === 'active' ? 'Active' : 'Degraded'}
-                    </span>
-                    {keyPool.keys.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveKey(k.key)}
-                        className="adm-remove-key-btn"
-                        title="Remove from pool"
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
         </div>
       </div>
 
@@ -676,36 +528,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <form onSubmit={handleSaveAssignedKey} className="adm-modal-form">
               <div className="adm-form-group">
-                <label className="adm-label">Select from Active Pool</label>
-                <select
-                  value={selectedAssignKey}
-                  onChange={(e) => {
-                    setSelectedAssignKey(e.target.value);
-                    setCustomAssignKey('');
-                  }}
-                  className="adm-modal-select"
-                >
-                  <option value="">-- Choose Key from Rotation Pool --</option>
-                  {keyPool.keys.map((k, idx) => (
-                    <option key={k.key} value={k.key}>
-                      Key #{idx + 1} ({k.maskedKey}) - {k.requestsHandled} requests
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="adm-form-group">
-                <label className="adm-label">OR Enter Custom Dedicated Key (sk-...)</label>
+                <label className="adm-label">Paste OpenCode Upstream API Key (sk-...)</label>
                 <input
                   type="text"
                   value={customAssignKey}
-                  onChange={(e) => {
-                    setCustomAssignKey(e.target.value);
-                    setSelectedAssignKey('');
-                  }}
-                  placeholder="sk-a3xZh5wVaJdZlMdn..."
-                  className="adm-modal-input"
+                  onChange={(e) => setCustomAssignKey(e.target.value)}
+                  placeholder="sk-a3xZh5wVaJdZlMdnIf7uMX8CswUR..."
+                  className="adm-modal-input font-mono"
+                  required
+                  autoFocus
                 />
+                <span className="text-xs text-white/40 mt-1">
+                  All requests from {assignUserModal.email} will be routed exclusively to this key.
+                </span>
               </div>
 
               <div className="adm-modal-actions">
@@ -727,7 +562,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={assigning || (!selectedAssignKey && !customAssignKey)}
+                  disabled={assigning || !customAssignKey.trim()}
                   className="adm-btn adm-btn-primary"
                 >
                   {assigning ? 'Binding...' : 'Save Dedicated Key'}

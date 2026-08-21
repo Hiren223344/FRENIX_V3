@@ -163,6 +163,10 @@
   gap: 24px;
 }
 
+.adm-deck-single {
+  width: 100%;
+}
+
 @media (max-width: 1024px) {
   .adm-deck-grid {
     grid-template-columns: 1fr;
