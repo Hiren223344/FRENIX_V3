@@ -129,10 +129,16 @@ adminRouter.get('/stats', adminAuthMiddleware, async (_req: Request, res: Respon
 
       if (u.assignedProviderKey) dedicatedKeysCount++;
 
-      const rStats = await getUsageStatsFromRedis(u.apiKey);
-      totalRequests += rStats.usage.totalRequests;
-      totalTokens += rStats.usage.tokens.total;
-      totalCostUsd += rStats.usage.totalCostUsd;
+      try {
+        if (u.apiKey) {
+          const rStats = await getUsageStatsFromRedis(u.apiKey);
+          if (rStats?.usage) {
+            totalRequests += rStats.usage.totalRequests || 0;
+            totalTokens += rStats.usage.tokens?.total || 0;
+            totalCostUsd += rStats.usage.totalCostUsd || 0;
+          }
+        }
+      } catch {}
     }
 
     return res.json({
@@ -161,13 +167,22 @@ adminRouter.get('/users', adminAuthMiddleware, async (_req: Request, res: Respon
     const allUsers = await getMergedAllUsers();
     const enrichedUsers = await Promise.all(
       allUsers.map(async (u) => {
-        const rStats = await getUsageStatsFromRedis(u.apiKey);
+        let rateLimit = undefined;
+        let usage = undefined;
+        try {
+          if (u.apiKey) {
+            const rStats = await getUsageStatsFromRedis(u.apiKey);
+            rateLimit = rStats?.rateLimit;
+            usage = rStats?.usage;
+          }
+        } catch {}
+
         return {
           id: u.id,
           email: u.email,
           apiKey: u.apiKey,
-          maskedKey: `${u.apiKey.slice(0, 7)}...${u.apiKey.slice(-6)}`,
-          tier: u.tier,
+          maskedKey: u.apiKey ? `${u.apiKey.slice(0, 7)}...${u.apiKey.slice(-6)}` : 'sk-...',
+          tier: u.tier || 'free',
           assignedProviderKey: u.assignedProviderKey || null,
           maskedAssignedKey: u.assignedProviderKey
             ? `${u.assignedProviderKey.slice(0, 7)}...${u.assignedProviderKey.slice(-6)}`
@@ -175,8 +190,8 @@ adminRouter.get('/users', adminAuthMiddleware, async (_req: Request, res: Respon
           assignedModel: u.assignedModel || null,
           customModelRouting: u.customModelRouting || null,
           createdAt: u.createdAt,
-          rateLimit: rStats.rateLimit,
-          usage: rStats.usage,
+          rateLimit,
+          usage,
         };
       })
     );

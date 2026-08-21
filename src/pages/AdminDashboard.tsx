@@ -125,22 +125,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         'x-admin-token': token,
       };
 
-      // 1. Fetch Stats
-      const statsRes = await fetch('/api/admin/stats', { headers });
-      if (statsRes.status === 401) {
-        onNavigateLogin();
-        return;
-      }
-      if (statsRes.ok) {
-        const statsData = await statsRes.json();
-        if (statsData.stats) setStats(statsData.stats);
+      // 1. Fetch Users
+      try {
+        const usersRes = await fetch('/api/admin/users', { headers });
+        if (usersRes.status === 401) {
+          sessionStorage.removeItem('frenix_admin_token');
+          onNavigateLogin();
+          return;
+        }
+        if (usersRes.ok) {
+          const usersData = await usersRes.json();
+          if (usersData.users) setUsers(usersData.users);
+        }
+      } catch (err) {
+        console.warn('Failed to load users list:', err);
       }
 
-      // 2. Fetch Users
-      const usersRes = await fetch('/api/admin/users', { headers });
-      if (usersRes.ok) {
-        const usersData = await usersRes.json();
-        if (usersData.users) setUsers(usersData.users);
+      // 2. Fetch Stats
+      try {
+        const statsRes = await fetch('/api/admin/stats', { headers });
+        if (statsRes.ok) {
+          const statsData = await statsRes.json();
+          if (statsData.stats) setStats(statsData.stats);
+        }
+      } catch (err) {
+        console.warn('Failed to load stats:', err);
       }
 
       // 3. Fetch Live Upstream Models
@@ -152,7 +161,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             setAvailableModels(modelsData.models);
           }
         }
-      } catch {}
+      } catch (err) {
+        console.warn('Failed to load models list:', err);
+      }
     } catch {
       toasts.error('Failed to load admin telemetry.');
     } finally {
