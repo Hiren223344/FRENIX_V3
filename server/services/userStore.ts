@@ -280,6 +280,9 @@ export function recordUserUsage(params: {
     ip,
   };
 
+  if (!user.usageLogs) {
+    user.usageLogs = [];
+  }
   user.usageLogs.unshift(log);
   if (user.usageLogs.length > 500) user.usageLogs.pop();
 
