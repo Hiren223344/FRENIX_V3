@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Router, Request, Response, NextFunction } from 'express';
 import {
   getAllUsersFromDb,
@@ -14,10 +15,35 @@ import type { UserTier, UserAccount } from '../types/user.js';
 const adminRouter = Router();
 
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin@frenix2026';
-const ADMIN_TOKEN_SECRET = 'frenix_admin_auth_token_99x';
+const ADMIN_TOKEN_SECRET = process.env.ADMIN_TOKEN_SECRET || 'frenix_admin_auth_token_99x';
 
 // Simple session token tracker
 const activeAdminTokens = new Set<string>();
+
+function createSignedAdminToken(): string {
+  const ts = Date.now().toString();
+  const sig = crypto.createHmac('sha256', ADMIN_TOKEN_SECRET).update('admin_' + ts).digest('hex');
+  return `adm_${ts}_${sig}`;
+}
+
+function verifyAdminToken(token?: string): boolean {
+  if (!token) return false;
+  if (activeAdminTokens.has(token)) return true;
+
+  // Format: adm_<timestamp>_<signature>
+  const parts = token.split('_');
+  if (parts.length === 3 && parts[0] === 'adm') {
+    const ts = parts[1];
+    const sig = parts[2];
+    const expectedSig = crypto.createHmac('sha256', ADMIN_TOKEN_SECRET).update('admin_' + ts).digest('hex');
+    if (sig === expectedSig) {
+      activeAdminTokens.add(token);
+      return true;
+    }
+  }
+
+  return false;
+}
 
 async function getMergedAllUsers(): Promise<UserAccount[]> {
   const dbUsers = await getAllUsersFromDb();
@@ -40,8 +66,8 @@ async function getMergedAllUsers(): Promise<UserAccount[]> {
  * Admin Authentication Middleware
  */
 export function adminAuthMiddleware(req: Request, res: Response, next: NextFunction) {
-  const token = req.headers['x-admin-token'] as string || req.headers.authorization?.replace(/^Bearer\s+/, '');
-  if (!token || !activeAdminTokens.has(token)) {
+  const token = (req.headers['x-admin-token'] as string) || req.headers.authorization?.replace(/^Bearer\s+/, '');
+  if (!token || !verifyAdminToken(token)) {
     return res.status(401).json({
       success: false,
       error: 'Unauthorized: Valid Admin Token required.',
@@ -55,14 +81,24 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
  */
 adminRouter.post('/login', (req: Request, res: Response) => {
   const { password } = req.body;
-  if (!password || password !== DEFAULT_ADMIN_PASSWORD) {
+  const clean = (password || '').trim();
+  const envPass = (process.env.ADMIN_PASSWORD || '').replace(/^["']|["']$/g, '').trim();
+
+  // Accept env password, default password 'admin@frenix2026', or 'frenix2026'
+  const isMatch =
+    (envPass && clean === envPass) ||
+    clean === 'admin@frenix2026' ||
+    clean === 'frenix2026' ||
+    clean === DEFAULT_ADMIN_PASSWORD.trim();
+
+  if (!clean || !isMatch) {
     return res.status(401).json({
       success: false,
       message: 'Invalid Admin Password.',
     });
   }
 
-  const token = `adm_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+  const token = createSignedAdminToken();
   activeAdminTokens.add(token);
 
   return res.json({
