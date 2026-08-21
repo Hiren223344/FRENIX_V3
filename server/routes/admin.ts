@@ -3,6 +3,7 @@ import {
   getAllUsersFromDb,
   updateUserTierInDb,
   createOrGetDbUser,
+  assignProviderKeyToUser,
 } from '../services/dbUserStore.js';
 import { getAllUsers } from '../services/userStore.js';
 import {
@@ -132,6 +133,10 @@ adminRouter.get('/users', adminAuthMiddleware, async (_req: Request, res: Respon
           apiKey: u.apiKey,
           maskedKey: `${u.apiKey.slice(0, 7)}...${u.apiKey.slice(-6)}`,
           tier: u.tier,
+          assignedProviderKey: u.assignedProviderKey || null,
+          maskedAssignedKey: u.assignedProviderKey
+            ? `${u.assignedProviderKey.slice(0, 7)}...${u.assignedProviderKey.slice(-6)}`
+            : null,
           createdAt: u.createdAt,
           rateLimit: rStats.rateLimit,
           usage: rStats.usage,
@@ -145,6 +150,47 @@ adminRouter.get('/users', adminAuthMiddleware, async (_req: Request, res: Respon
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Error fetching users list';
+    return res.status(500).json({ success: false, error: message });
+  }
+});
+
+/**
+ * 4. POST /api/admin/users/assign-key — Assign or unassign a dedicated OpenCode upstream key to a PRO user
+ */
+adminRouter.post('/users/assign-key', adminAuthMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { emailOrKey, providerKey } = req.body;
+    if (!emailOrKey) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing parameter: 'emailOrKey' is required.",
+      });
+    }
+
+    const updated = await assignProviderKeyToUser(emailOrKey, providerKey || '');
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        error: `User '${emailOrKey}' not found.`,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: providerKey
+        ? `Dedicated OpenCode key '${providerKey.slice(0, 7)}...${providerKey.slice(-6)}' assigned to ${updated.email}.`
+        : `Dedicated key removed. User ${updated.email} reverted to global key rotation pool.`,
+      user: {
+        id: updated.id,
+        email: updated.email,
+        apiKey: updated.apiKey,
+        tier: updated.tier,
+        assignedProviderKey: updated.assignedProviderKey,
+        updatedAt: updated.updatedAt,
+      },
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Error assigning dedicated key';
     return res.status(500).json({ success: false, error: message });
   }
 });

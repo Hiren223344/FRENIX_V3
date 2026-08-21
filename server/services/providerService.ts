@@ -223,10 +223,11 @@ export function sanitizeMessages(
 }
 
 /**
- * 1. Forward OpenAI Chat Completion to Provider-1 with Key Rotation & Failover
+ * 1. Forward OpenAI Chat Completion to Provider-1 with Dedicated Key / Key Rotation & Failover
  */
 export async function forwardChatCompletionToProvider1(
-  payload: ChatCompletionRequest
+  payload: ChatCompletionRequest,
+  preferredKey?: string
 ): Promise<ChatCompletionResponse | null> {
   const baseUrl = getProvider1BaseUrl();
   const originalModel = payload.model;
@@ -239,6 +240,33 @@ export async function forwardChatCompletionToProvider1(
     stream: false,
   };
 
+  // 1. If PRO user has a dedicated assigned key, dispatch directly to it
+  if (preferredKey && preferredKey.startsWith('sk-')) {
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${preferredKey}`,
+        },
+        body: JSON.stringify(bodyToSend),
+      });
+
+      if (response.ok) {
+        const data = (await response.json()) as ChatCompletionResponse;
+        return {
+          ...data,
+          model: originalModel,
+        };
+      } else if (response.status === 429 || response.status === 401) {
+        console.warn(`[Dedicated Upstream Key ${preferredKey.slice(0, 7)}... returned ${response.status}. Falling back to global key pool...]`);
+      }
+    } catch (err) {
+      console.warn(`[Dedicated Key Network Warning]:`, err);
+    }
+  }
+
+  // 2. Global Key Rotation Pool with automatic failover
   const maxAttempts = Math.min(3, keyPool.length);
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -282,16 +310,17 @@ export async function forwardChatCompletionToProvider1(
 }
 
 /**
- * 2. Stream OpenAI SSE Chat Completion from Provider-1 with Key Rotation
+ * 2. Stream OpenAI SSE Chat Completion from Provider-1 with Dedicated Key / Key Rotation
  */
 export async function* streamChatCompletionFromProvider1(
-  payload: ChatCompletionRequest
+  payload: ChatCompletionRequest,
+  preferredKey?: string
 ): AsyncGenerator<string, boolean, unknown> {
   const originalModel = payload.model;
 
-  // 1. Fetch live completion from Provider-1 with Key Rotation
+  // 1. Fetch live completion from Provider-1
   try {
-    const nonStreamResult = await forwardChatCompletionToProvider1(payload);
+    const nonStreamResult = await forwardChatCompletionToProvider1(payload, preferredKey);
     if (nonStreamResult) {
       const content = nonStreamResult.choices?.[0]?.message?.content || '';
       const completionId = nonStreamResult.id || `chatcmpl-${Date.now()}`;
@@ -339,10 +368,11 @@ export async function* streamChatCompletionFromProvider1(
 }
 
 /**
- * 3. Forward Anthropic Messages request to Provider-1 with Key Rotation & Composed System Prompt
+ * 3. Forward Anthropic Messages request to Provider-1 with Dedicated Key / Key Rotation
  */
 export async function forwardAnthropicMessageToProvider1(
-  payload: AnthropicMessagesRequest
+  payload: AnthropicMessagesRequest,
+  preferredKey?: string
 ): Promise<AnthropicMessageResponse | null> {
   const originalModel = payload.model;
   const targetModel = resolveRoutedModel(payload.model);
@@ -354,7 +384,7 @@ export async function forwardAnthropicMessageToProvider1(
     stream: false,
   };
 
-  const openAiResult = await forwardChatCompletionToProvider1(openAiPayload);
+  const openAiResult = await forwardChatCompletionToProvider1(openAiPayload, preferredKey);
   if (openAiResult) {
     const reply = openAiResult.choices?.[0]?.message?.content || '';
     return {
@@ -376,15 +406,16 @@ export async function forwardAnthropicMessageToProvider1(
 }
 
 /**
- * 4. Stream Anthropic Messages from Provider-1 with Model Routing & SSE Translation
+ * 4. Stream Anthropic Messages from Provider-1 with Dedicated Key / Key Rotation
  */
 export async function* streamAnthropicMessageFromProvider1(
-  payload: AnthropicMessagesRequest
+  payload: AnthropicMessagesRequest,
+  preferredKey?: string
 ): AsyncGenerator<string, boolean, unknown> {
   const originalModel = payload.model;
   const msgId = `msg_${Date.now()}`;
 
-  const directResult = await forwardAnthropicMessageToProvider1(payload);
+  const directResult = await forwardAnthropicMessageToProvider1(payload, preferredKey);
   if (directResult) {
     const textContent = directResult.content?.[0]?.text || '';
     const inputTokens = directResult.usage?.input_tokens || 20;

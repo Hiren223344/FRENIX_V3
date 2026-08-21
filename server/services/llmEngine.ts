@@ -11,6 +11,7 @@ import {
   forwardChatCompletionToProvider1,
   streamChatCompletionFromProvider1,
 } from './providerService.js';
+import { getUserByApiKeyFromDb } from './dbUserStore.js';
 
 export const SUPPORTED_MODELS: ModelObject[] = [
   { id: 'intelligence-evolution-v1', object: 'model', created: 1718000000, owned_by: 'intelligence-evolution' },
@@ -77,9 +78,11 @@ export async function createChatCompletion(
     messages: finalMessages,
   };
 
-  // 1. Dispatch to Provider-1 (OpenCode Zen Gateway)
+  // 1. Dispatch to Provider-1 (OpenCode Zen Gateway) with Dedicated Key if PRO user
   try {
-    const provider1Result = await forwardChatCompletionToProvider1(finalReq);
+    const user = _apiKey ? await getUserByApiKeyFromDb(_apiKey) : null;
+    const preferredKey = user?.assignedProviderKey;
+    const provider1Result = await forwardChatCompletionToProvider1(finalReq, preferredKey);
     if (provider1Result) {
       return provider1Result;
     }
@@ -140,10 +143,12 @@ export async function* streamChatCompletion(
     messages: finalMessages,
   };
 
-  // 1. Attempt Streaming from Provider-1
+  // 1. Attempt Streaming from Provider-1 with Dedicated Key if PRO user
   let streamedSuccessfully = false;
   try {
-    const provider1Stream = streamChatCompletionFromProvider1(finalReq);
+    const user = _apiKey ? await getUserByApiKeyFromDb(_apiKey) : null;
+    const preferredKey = user?.assignedProviderKey;
+    const provider1Stream = streamChatCompletionFromProvider1(finalReq, preferredKey);
     for await (const chunk of provider1Stream) {
       streamedSuccessfully = true;
       yield chunk;

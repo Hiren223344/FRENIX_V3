@@ -15,6 +15,7 @@ import {
   forwardAnthropicMessageToProvider1,
   streamAnthropicMessageFromProvider1,
 } from './providerService.js';
+import { getUserByApiKeyFromDb } from './dbUserStore.js';
 
 export function generateAnthropicMsgId(): string {
   return `msg_${crypto.randomBytes(16).toString('hex')}`;
@@ -72,9 +73,11 @@ export async function createAnthropicMessage(
     system: composedSystem,
   };
 
-  // 1. Dispatch to Provider-1 (OpenCode Zen Gateway)
+  // 1. Dispatch to Provider-1 (OpenCode Zen Gateway) with Dedicated Key if PRO user
   try {
-    const provider1Result = await forwardAnthropicMessageToProvider1(finalReq);
+    const user = _apiKey ? await getUserByApiKeyFromDb(_apiKey) : null;
+    const preferredKey = user?.assignedProviderKey;
+    const provider1Result = await forwardAnthropicMessageToProvider1(finalReq, preferredKey);
     if (provider1Result) {
       return provider1Result;
     }
@@ -129,10 +132,12 @@ export async function* streamAnthropicMessage(
     system: composedSystem,
   };
 
-  // 1. Attempt Streaming from Provider-1
+  // 1. Attempt Streaming from Provider-1 with Dedicated Key if PRO user
   let streamedSuccessfully = false;
   try {
-    const provider1Stream = streamAnthropicMessageFromProvider1(finalReq);
+    const user = _apiKey ? await getUserByApiKeyFromDb(_apiKey) : null;
+    const preferredKey = user?.assignedProviderKey;
+    const provider1Stream = streamAnthropicMessageFromProvider1(finalReq, preferredKey);
     for await (const chunk of provider1Stream) {
       streamedSuccessfully = true;
       yield chunk;

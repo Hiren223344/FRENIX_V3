@@ -1,24 +1,75 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { getSupabaseClient, isSupabaseConfigured } from './supabaseStorage.js';
 import type { UserAccount, UserTier, UsageLog } from '../types/user.js';
 import { RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_HOURS } from './userStore.js';
 
-// In-Memory Fallback Cache (used only when DB is offline)
-const fallbackUsersByApiKey = new Map<string, UserAccount>();
-const fallbackUsersByEmail = new Map<string, UserAccount>();
-const fallbackUsageLogs = new Map<string, UsageLog[]>();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_DIR = path.resolve(__dirname, '../../data');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+
+// Ensure data directory exists
+try {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+} catch {}
+
+// Persistent in-memory + disk cache
+const usersByApiKey = new Map<string, UserAccount>();
+const usersByEmail = new Map<string, UserAccount>();
+const usageLogsByApiKey = new Map<string, UsageLog[]>();
+
+// Load persisted users from disk on startup
+function loadUsersFromDisk(): void {
+  try {
+    if (fs.existsSync(USERS_FILE)) {
+      const raw = fs.readFileSync(USERS_FILE, 'utf-8');
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) {
+        for (const u of list) {
+          if (u && u.email && u.apiKey) {
+            usersByApiKey.set(u.apiKey, u);
+            usersByEmail.set(u.email.toLowerCase(), u);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Disk Storage Warning]:', err);
+  }
+}
+
+// Save users to disk
+function saveUsersToDisk(): void {
+  try {
+    const list = Array.from(usersByEmail.values());
+    fs.writeFileSync(USERS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('[Disk Save Warning]:', err);
+  }
+}
+
+loadUsersFromDisk();
 
 export function generateRandomHexApiKey(): string {
   return `sk-${crypto.randomBytes(24).toString('hex')}`;
 }
 
 /**
- * 1. DB tells user details and authenticates API Key (Direct DB Query)
+ * 1. DB tells user details and authenticates API Key
  */
 export async function getUserByApiKeyFromDb(apiKey: string): Promise<UserAccount | null> {
   const cleanKey = apiKey.trim();
 
-  // 1. Direct Supabase Database Query First
+  // 1. Check local persistent store
+  const local = usersByApiKey.get(cleanKey);
+  if (local) return local;
+
+  // 2. Query Supabase Database if configured
   if (isSupabaseConfigured()) {
     const supabase = getSupabaseClient();
     if (supabase) {
@@ -35,6 +86,7 @@ export async function getUserByApiKeyFromDb(apiKey: string): Promise<UserAccount
             email: data.email,
             apiKey: data.api_key,
             tier: (data.tier as UserTier) || 'free',
+            assignedProviderKey: data.assigned_provider_key || undefined,
             createdAt: data.created_at || new Date().toISOString(),
             updatedAt: data.updated_at || new Date().toISOString(),
             usage: {
@@ -48,8 +100,9 @@ export async function getUserByApiKeyFromDb(apiKey: string): Promise<UserAccount
             },
             usageLogs: [],
           };
-          fallbackUsersByApiKey.set(cleanKey, user);
-          fallbackUsersByEmail.set(user.email.toLowerCase(), user);
+          usersByApiKey.set(cleanKey, user);
+          usersByEmail.set(user.email.toLowerCase(), user);
+          saveUsersToDisk();
           return user;
         }
       } catch (err) {
@@ -58,17 +111,20 @@ export async function getUserByApiKeyFromDb(apiKey: string): Promise<UserAccount
     }
   }
 
-  // 2. Fallback to memory cache
-  return fallbackUsersByApiKey.get(cleanKey) || null;
+  return null;
 }
 
 /**
- * 2. DB tells user details by Email (Direct DB Query)
+ * 2. DB tells user details by Email
  */
 export async function getUserByEmailFromDb(email: string): Promise<UserAccount | null> {
   const cleanEmail = email.trim().toLowerCase();
 
-  // 1. Direct Supabase Database Query First
+  // 1. Check local persistent store
+  const local = usersByEmail.get(cleanEmail);
+  if (local) return local;
+
+  // 2. Query Supabase Database if configured
   if (isSupabaseConfigured()) {
     const supabase = getSupabaseClient();
     if (supabase) {
@@ -85,6 +141,7 @@ export async function getUserByEmailFromDb(email: string): Promise<UserAccount |
             email: data.email,
             apiKey: data.api_key,
             tier: (data.tier as UserTier) || 'free',
+            assignedProviderKey: data.assigned_provider_key || undefined,
             createdAt: data.created_at || new Date().toISOString(),
             updatedAt: data.updated_at || new Date().toISOString(),
             usage: {
@@ -98,8 +155,9 @@ export async function getUserByEmailFromDb(email: string): Promise<UserAccount |
             },
             usageLogs: [],
           };
-          fallbackUsersByApiKey.set(user.apiKey, user);
-          fallbackUsersByEmail.set(cleanEmail, user);
+          usersByApiKey.set(user.apiKey, user);
+          usersByEmail.set(cleanEmail, user);
+          saveUsersToDisk();
           return user;
         }
       } catch (err) {
@@ -108,27 +166,29 @@ export async function getUserByEmailFromDb(email: string): Promise<UserAccount |
     }
   }
 
-  // 2. Fallback to memory cache
-  return fallbackUsersByEmail.get(cleanEmail) || null;
+  return null;
 }
 
 /**
- * 3. Create or register user directly in Supabase DB (Default Tier = free)
+ * 3. Create or register user directly in DB & local store
  */
 export async function createOrGetDbUser(
   apiKey?: string,
   email?: string,
-  tier: UserTier = 'free'
+  tier: UserTier = 'free',
+  assignedProviderKey?: string
 ): Promise<UserAccount> {
   const cleanKey = apiKey?.trim();
   const cleanEmail = email?.trim().toLowerCase();
 
-  // 1. Check existing record in DB
+  // 1. Check existing record
   if (cleanKey) {
     const existing = await getUserByApiKeyFromDb(cleanKey);
     if (existing) {
       if (cleanEmail && !existing.email.includes('@')) {
         existing.email = cleanEmail;
+        usersByEmail.set(cleanEmail, existing);
+        saveUsersToDisk();
         await updateUserInDb(existing.apiKey, { email: cleanEmail });
       }
       return existing;
@@ -140,13 +200,15 @@ export async function createOrGetDbUser(
     if (existing) {
       if (cleanKey && existing.apiKey !== cleanKey) {
         existing.apiKey = cleanKey;
+        usersByApiKey.set(cleanKey, existing);
+        saveUsersToDisk();
         await updateUserInDb(existing.apiKey, { api_key: cleanKey });
       }
       return existing;
     }
   }
 
-  // 2. Create new user in DB
+  // 2. Create new user
   const finalKey = cleanKey || generateRandomHexApiKey();
   const finalEmail = cleanEmail || (cleanKey ? `user_${cleanKey.substring(3, 11)}@platform.ai` : 'developer@intelligence.internal');
   const now = new Date().toISOString();
@@ -157,6 +219,7 @@ export async function createOrGetDbUser(
     email: finalEmail,
     apiKey: finalKey,
     tier,
+    assignedProviderKey: assignedProviderKey || undefined,
     createdAt: now,
     updatedAt: now,
     usage: {
@@ -171,31 +234,30 @@ export async function createOrGetDbUser(
     usageLogs: [],
   };
 
-  // Sync to memory
-  fallbackUsersByApiKey.set(finalKey, newUser);
-  fallbackUsersByEmail.set(finalEmail, newUser);
+  // Sync to local memory + disk
+  usersByApiKey.set(finalKey, newUser);
+  usersByEmail.set(finalEmail, newUser);
+  saveUsersToDisk();
 
-  // Direct Supabase DB Upsert
+  // Async Upsert into Supabase DB
   if (isSupabaseConfigured()) {
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        const { error } = await supabase.from('users').upsert(
+        await supabase.from('users').upsert(
           {
             id: userId,
             email: finalEmail,
             api_key: finalKey,
             tier,
+            assigned_provider_key: assignedProviderKey || null,
             created_at: now,
             updated_at: now,
           },
           { onConflict: 'email' }
         );
-        if (error) {
-          console.warn('[Supabase DB Upsert Notice]:', error.message);
-        }
       } catch (err) {
-        console.warn('[Supabase DB Connection]:', err);
+        console.warn('[Supabase DB Upsert]:', err);
       }
     }
   }
@@ -204,34 +266,57 @@ export async function createOrGetDbUser(
 }
 
 /**
- * 4. Update user directly in Supabase DB
+ * 4. Update user fields
  */
 export async function updateUserInDb(
   apiKeyOrEmail: string,
-  fieldsToUpdate: Partial<{ email: string; api_key: string; tier: UserTier }>
+  fieldsToUpdate: Partial<{ email: string; api_key: string; tier: UserTier; assigned_provider_key: string | null }>
 ): Promise<void> {
+  const clean = apiKeyOrEmail.trim().toLowerCase();
+  const user = usersByEmail.get(clean) || usersByApiKey.get(apiKeyOrEmail.trim());
+  if (user) {
+    if (fieldsToUpdate.email) user.email = fieldsToUpdate.email;
+    if (fieldsToUpdate.api_key) user.apiKey = fieldsToUpdate.api_key;
+    if (fieldsToUpdate.tier) user.tier = fieldsToUpdate.tier;
+    if ('assigned_provider_key' in fieldsToUpdate) {
+      user.assignedProviderKey = fieldsToUpdate.assigned_provider_key || undefined;
+    }
+    user.updatedAt = new Date().toISOString();
+    usersByEmail.set(user.email.toLowerCase(), user);
+    usersByApiKey.set(user.apiKey, user);
+    saveUsersToDisk();
+  }
+
   if (isSupabaseConfigured()) {
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        const clean = apiKeyOrEmail.trim();
         await supabase
           .from('users')
           .update({ ...fieldsToUpdate, updated_at: new Date().toISOString() })
-          .or(`email.eq.${clean.toLowerCase()},api_key.eq.${clean}`);
+          .or(`email.eq.${clean},api_key.eq.${apiKeyOrEmail.trim()}`);
       } catch {}
     }
   }
 }
 
 /**
- * 5. Update user tier directly in Supabase DB
+ * 5. Update user tier
  */
 export async function updateUserTierInDb(emailOrKey: string, newTier: UserTier): Promise<UserAccount | null> {
   const clean = emailOrKey.trim().toLowerCase();
   const now = new Date().toISOString();
 
-  // 1. Direct Supabase DB Update First
+  let user = usersByEmail.get(clean) || usersByApiKey.get(emailOrKey.trim());
+  if (user) {
+    user.tier = newTier;
+    user.updatedAt = now;
+    usersByEmail.set(user.email.toLowerCase(), user);
+    usersByApiKey.set(user.apiKey, user);
+    saveUsersToDisk();
+  }
+
+  // Update in Supabase DB
   if (isSupabaseConfigured()) {
     const supabase = getSupabaseClient();
     if (supabase) {
@@ -243,12 +328,13 @@ export async function updateUserTierInDb(emailOrKey: string, newTier: UserTier):
           .select()
           .maybeSingle();
 
-        if (data && !error) {
-          const user: UserAccount = {
+        if (data && !error && !user) {
+          user = {
             id: data.id,
             email: data.email,
             apiKey: data.api_key,
             tier: data.tier as UserTier,
+            assignedProviderKey: data.assigned_provider_key || undefined,
             createdAt: data.created_at,
             updatedAt: data.updated_at,
             usage: {
@@ -262,9 +348,9 @@ export async function updateUserTierInDb(emailOrKey: string, newTier: UserTier):
             },
             usageLogs: [],
           };
-          fallbackUsersByApiKey.set(user.apiKey, user);
-          fallbackUsersByEmail.set(user.email.toLowerCase(), user);
-          return user;
+          usersByApiKey.set(user.apiKey, user);
+          usersByEmail.set(user.email.toLowerCase(), user);
+          saveUsersToDisk();
         }
       } catch (err) {
         console.warn('[DB User Tier Update Error]:', err);
@@ -272,24 +358,92 @@ export async function updateUserTierInDb(emailOrKey: string, newTier: UserTier):
     }
   }
 
-  // 2. Memory Fallback
-  let user = fallbackUsersByEmail.get(clean) || fallbackUsersByApiKey.get(emailOrKey.trim());
-  if (user) {
-    user.tier = newTier;
-    user.updatedAt = now;
-    return user;
-  }
-
-  return null;
+  return user || null;
 }
 
 /**
- * 6. Get all users directly from Supabase DB for Admin Dashboard
+ * 6. Assign Dedicated OpenCode Upstream Key to User
+ */
+export async function assignProviderKeyToUser(
+  emailOrKey: string,
+  providerKey: string
+): Promise<UserAccount | null> {
+  const clean = emailOrKey.trim().toLowerCase();
+  const cleanKey = providerKey.trim();
+  const now = new Date().toISOString();
+
+  let user = usersByEmail.get(clean) || usersByApiKey.get(emailOrKey.trim());
+  if (user) {
+    user.assignedProviderKey = cleanKey || undefined;
+    user.updatedAt = now;
+    usersByEmail.set(user.email.toLowerCase(), user);
+    usersByApiKey.set(user.apiKey, user);
+    saveUsersToDisk();
+  }
+
+  if (isSupabaseConfigured()) {
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .update({ assigned_provider_key: cleanKey || null, updated_at: now })
+          .or(`email.eq.${clean},api_key.eq.${emailOrKey.trim()}`)
+          .select()
+          .maybeSingle();
+
+        if (data && !error && !user) {
+          user = {
+            id: data.id,
+            email: data.email,
+            apiKey: data.api_key,
+            tier: data.tier as UserTier,
+            assignedProviderKey: data.assigned_provider_key || undefined,
+            createdAt: data.created_at,
+            updatedAt: data.updated_at,
+            usage: {
+              totalRequests: 0,
+              totalCost: 0,
+              totalRequestsLeft: RATE_LIMIT_MAX_REQUESTS,
+              totalPromptTokens: 0,
+              totalCompletionTokens: 0,
+              rateLimitWindowHours: RATE_LIMIT_WINDOW_HOURS,
+              rateLimitMaxRequests: RATE_LIMIT_MAX_REQUESTS,
+            },
+            usageLogs: [],
+          };
+          usersByApiKey.set(user.apiKey, user);
+          usersByEmail.set(user.email.toLowerCase(), user);
+          saveUsersToDisk();
+        }
+      } catch (err) {
+        console.warn('[DB Assign Provider Key Error]:', err);
+      }
+    }
+  }
+
+  return user || null;
+}
+
+/**
+ * 7. Get all users for Admin Dashboard (Combines Supabase DB + Disk + Memory without dropping any users!)
  */
 export async function getAllUsersFromDb(): Promise<UserAccount[]> {
   const usersMap = new Map<string, UserAccount>();
 
-  // 1. Fetch Directly from Supabase Database First
+  // 1. Load all local & disk users first
+  for (const u of usersByEmail.values()) {
+    if (u && u.email) {
+      usersMap.set(u.email.toLowerCase(), u);
+    }
+  }
+  for (const u of usersByApiKey.values()) {
+    if (u && u.email) {
+      usersMap.set(u.email.toLowerCase(), u);
+    }
+  }
+
+  // 2. Fetch from Supabase DB and merge
   if (isSupabaseConfigured()) {
     const supabase = getSupabaseClient();
     if (supabase) {
@@ -301,29 +455,34 @@ export async function getAllUsersFromDb(): Promise<UserAccount[]> {
 
         if (data && !error && Array.isArray(data)) {
           for (const d of data) {
-            const user: UserAccount = {
-              id: d.id,
-              email: d.email,
-              apiKey: d.api_key,
-              tier: (d.tier as UserTier) || 'free',
-              createdAt: d.created_at,
-              updatedAt: d.updated_at,
-              usage: {
-                totalRequests: 0,
-                totalCost: 0,
-                totalRequestsLeft: RATE_LIMIT_MAX_REQUESTS,
-                totalPromptTokens: 0,
-                totalCompletionTokens: 0,
-                rateLimitWindowHours: RATE_LIMIT_WINDOW_HOURS,
-                rateLimitMaxRequests: RATE_LIMIT_MAX_REQUESTS,
-              },
-              usageLogs: [],
-            };
-            usersMap.set(d.email.toLowerCase(), user);
-            fallbackUsersByApiKey.set(d.api_key, user);
-            fallbackUsersByEmail.set(d.email.toLowerCase(), user);
+            const emailKey = (d.email || '').toLowerCase();
+            if (emailKey) {
+              const existing = usersMap.get(emailKey);
+              const userRecord: UserAccount = {
+                id: d.id || existing?.id || `usr_${d.api_key?.substring(3, 11)}`,
+                email: d.email,
+                apiKey: d.api_key || existing?.apiKey || '',
+                tier: (d.tier as UserTier) || existing?.tier || 'free',
+                assignedProviderKey: d.assigned_provider_key || existing?.assignedProviderKey || undefined,
+                createdAt: d.created_at || existing?.createdAt || new Date().toISOString(),
+                updatedAt: d.updated_at || existing?.updatedAt || new Date().toISOString(),
+                usage: existing?.usage || {
+                  totalRequests: 0,
+                  totalCost: 0,
+                  totalRequestsLeft: RATE_LIMIT_MAX_REQUESTS,
+                  totalPromptTokens: 0,
+                  totalCompletionTokens: 0,
+                  rateLimitWindowHours: RATE_LIMIT_WINDOW_HOURS,
+                  rateLimitMaxRequests: RATE_LIMIT_MAX_REQUESTS,
+                },
+                usageLogs: existing?.usageLogs || [],
+              };
+              usersMap.set(emailKey, userRecord);
+              usersByApiKey.set(userRecord.apiKey, userRecord);
+              usersByEmail.set(emailKey, userRecord);
+            }
           }
-          return Array.from(usersMap.values());
+          saveUsersToDisk();
         }
       } catch (err) {
         console.warn('[DB Fetch All Users Exception]:', err);
@@ -331,19 +490,11 @@ export async function getAllUsersFromDb(): Promise<UserAccount[]> {
     }
   }
 
-  // 2. If DB returned empty or offline, fallback to memory
-  for (const u of fallbackUsersByEmail.values()) {
-    usersMap.set(u.email.toLowerCase(), u);
-  }
-  for (const u of fallbackUsersByApiKey.values()) {
-    usersMap.set(u.email.toLowerCase(), u);
-  }
-
   return Array.from(usersMap.values());
 }
 
 /**
- * 7. DB records and stores persistent audit logs directly in Supabase
+ * 8. Persistent audit logs
  */
 export async function persistUsageLogToDb(params: {
   apiKey: string;
@@ -372,13 +523,11 @@ export async function persistUsageLogToDb(params: {
     ip,
   };
 
-  // Cache in-memory
-  const logsList = fallbackUsageLogs.get(apiKey) || [];
+  const logsList = usageLogsByApiKey.get(apiKey) || [];
   logsList.unshift(log);
   if (logsList.length > 500) logsList.pop();
-  fallbackUsageLogs.set(apiKey, logsList);
+  usageLogsByApiKey.set(apiKey, logsList);
 
-  // Direct Supabase DB insert
   if (isSupabaseConfigured()) {
     const supabase = getSupabaseClient();
     if (supabase) {
@@ -405,10 +554,9 @@ export async function persistUsageLogToDb(params: {
 }
 
 /**
- * 8. DB retrieves recent usage audit logs directly from Supabase
+ * 9. Retrieve audit logs
  */
 export async function getRecentLogsFromDb(apiKey: string): Promise<UsageLog[]> {
-  // 1. Direct Supabase DB Query
   if (isSupabaseConfigured()) {
     const supabase = getSupabaseClient();
     if (supabase) {
@@ -421,7 +569,7 @@ export async function getRecentLogsFromDb(apiKey: string): Promise<UsageLog[]> {
           .limit(50);
 
         if (data && !error && data.length > 0) {
-          const logs: UsageLog[] = data.map((d) => ({
+          return data.map((d) => ({
             id: d.id,
             timestamp: d.created_at,
             endpoint: d.endpoint,
@@ -433,12 +581,10 @@ export async function getRecentLogsFromDb(apiKey: string): Promise<UsageLog[]> {
             status: d.status,
             ip: d.ip_address,
           }));
-          fallbackUsageLogs.set(apiKey, logs);
-          return logs;
         }
       } catch {}
     }
   }
 
-  return fallbackUsageLogs.get(apiKey) || [];
+  return usageLogsByApiKey.get(apiKey) || [];
 }

@@ -29,6 +29,7 @@ export interface UserAccount {
   apiKey: string; // sk-<randomhex>
   apiKeyHash?: string;
   tier: UserTier;
+  assignedProviderKey?: string; // Dedicated upstream OpenCode Zen key for PRO user
   createdAt: string;
   updatedAt: string;
   usage: UserUsage;

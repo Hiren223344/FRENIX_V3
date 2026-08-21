@@ -537,3 +537,64 @@
   gap: 10px;
   margin-top: 12px;
 }
+
+.adm-modal-sub {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+  margin: -12px 0 18px 0;
+}
+
+/* Assigned Key Badges & Buttons */
+.adm-assigned-key-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.adm-dedicated-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  font-weight: 600;
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  color: #fde047;
+}
+
+.adm-pool-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.adm-unlink-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+}
+.adm-unlink-btn:hover {
+  color: #ef4444;
+}
+
+.adm-btn-keybind {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+.adm-btn-keybind:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
