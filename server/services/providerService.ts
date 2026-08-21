@@ -427,7 +427,7 @@ export async function* streamAnthropicMessageFromProvider1(
  */
 export async function fetchProvider1Models(): Promise<ModelObject[]> {
   const baseUrl = getProvider1BaseUrl();
-  const apiKey = FALLBACK_PROVIDER_KEYS[0];
+  const apiKey = getCandidateKeys()[0];
 
   try {
     const targetUrl = `${baseUrl}/models`;
