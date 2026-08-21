@@ -7,6 +7,8 @@ import {
 } from '../services/dbUserStore.js';
 import { getAllUsers } from '../services/userStore.js';
 import { getUsageStatsFromRedis } from '../services/redisUsageService.js';
+import { fetchProvider1Models } from '../services/providerService.js';
+import { SUPPORTED_MODELS } from '../services/llmEngine.js';
 import type { UserTier, UserAccount } from '../types/user.js';
 
 const adminRouter = Router();
@@ -154,7 +156,7 @@ adminRouter.get('/users', adminAuthMiddleware, async (_req: Request, res: Respon
 });
 
 /**
- * 4. POST /api/admin/users/update — Full User Configuration Update (API Key, Tier, Dedicated Upstream Key, Assigned Routed Model)
+ * 4. POST /api/admin/users/update — Full User Configuration Update
  */
 adminRouter.post('/users/update', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
@@ -265,4 +267,35 @@ adminRouter.post('/users/create', adminAuthMiddleware, async (req: Request, res:
   }
 });
 
+/**
+ * 7. GET /api/admin/models — Dynamic Upstream & Local Models List
+ */
+adminRouter.get('/models', adminAuthMiddleware, async (_req: Request, res: Response) => {
+  try {
+    const upstream = await fetchProvider1Models();
+    const map = new Map<string, { id: string; name: string; owned_by?: string }>();
+
+    // Add local supported models
+    for (const m of SUPPORTED_MODELS) {
+      map.set(m.id, { id: m.id, name: m.id, owned_by: m.owned_by });
+    }
+
+    // Add live upstream models from newapi.frenix.sh
+    for (const m of upstream) {
+      if (m && m.id) {
+        map.set(m.id, { id: m.id, name: m.id, owned_by: m.owned_by || 'upstream' });
+      }
+    }
+
+    return res.json({
+      success: true,
+      models: Array.from(map.values()),
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Error fetching models list';
+    return res.status(500).json({ success: false, error: message });
+  }
+});
+
 export default adminRouter;
+

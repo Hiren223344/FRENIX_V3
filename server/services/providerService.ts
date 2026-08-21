@@ -443,24 +443,26 @@ export async function* streamAnthropicMessageFromProvider1(
  */
 export async function fetchProvider1Models(): Promise<ModelObject[]> {
   const baseUrl = getProvider1BaseUrl();
-  const apiKey = getCandidateKeys()[0];
+  const candidateKeys = getCandidateKeys();
 
-  try {
-    const targetUrl = `${baseUrl}/models`;
-    const response = await fetch(targetUrl, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-    });
+  for (const apiKey of candidateKeys) {
+    try {
+      const targetUrl = `${baseUrl}/models`;
+      const response = await fetch(targetUrl, {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+      });
 
-    if (response.ok) {
-      const result = await response.json();
-      if (result && Array.isArray(result.data)) {
-        return result.data as ModelObject[];
+      if (response.ok) {
+        const result = await response.json();
+        if (result && Array.isArray(result.data)) {
+          return result.data as ModelObject[];
+        }
       }
+    } catch (err) {
+      console.warn('[Provider-1] Could not fetch models list:', err);
     }
-  } catch (err) {
-    console.warn('[Provider-1] Could not fetch models list:', err);
   }
 
   return [];

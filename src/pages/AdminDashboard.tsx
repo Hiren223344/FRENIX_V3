@@ -90,6 +90,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   });
 
   const [users, setUsers] = useState<AdminUserItem[]>([]);
+  const [availableModels, setAvailableModels] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -141,6 +142,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const usersData = await usersRes.json();
         if (usersData.users) setUsers(usersData.users);
       }
+
+      // 3. Fetch Live Upstream Models
+      try {
+        const modelsRes = await fetch('/api/admin/models', { headers });
+        if (modelsRes.ok) {
+          const modelsData = await modelsRes.json();
+          if (modelsData.models && Array.isArray(modelsData.models)) {
+            setAvailableModels(modelsData.models);
+          }
+        }
+      } catch {}
     } catch {
       toasts.error('Failed to load admin telemetry.');
     } finally {
@@ -279,6 +291,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     toasts.message('Admin session ended.');
     onNavigateHome();
   };
+
+  const allSelectModels = [
+    ...PRESET_MODELS,
+    ...availableModels
+      .filter((m) => !PRESET_MODELS.some((p) => p.id === m.id))
+      .map((m) => ({ id: m.id, label: `${m.id} (Upstream NewAPI)` })),
+  ];
 
   const filteredUsers = users.filter(
     (u) =>
@@ -570,7 +589,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={(e) => setEditAssignedModel(e.target.value)}
                   className="adm-modal-select"
                 >
-                  {PRESET_MODELS.map((m) => (
+                  {allSelectModels.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.label}
                     </option>
@@ -647,7 +666,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={(e) => setNewUserModel(e.target.value)}
                   className="adm-modal-select"
                 >
-                  {PRESET_MODELS.map((m) => (
+                  {allSelectModels.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.label}
                     </option>
