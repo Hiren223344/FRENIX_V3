@@ -3,7 +3,7 @@ import {
   getAllUsersFromDb,
   updateUserTierInDb,
   createOrGetDbUser,
-  assignProviderKeyToUser,
+  updateUserConfigInDb,
 } from '../services/dbUserStore.js';
 import { getAllUsers } from '../services/userStore.js';
 import { getUsageStatsFromRedis } from '../services/redisUsageService.js';
@@ -134,6 +134,8 @@ adminRouter.get('/users', adminAuthMiddleware, async (_req: Request, res: Respon
           maskedAssignedKey: u.assignedProviderKey
             ? `${u.assignedProviderKey.slice(0, 7)}...${u.assignedProviderKey.slice(-6)}`
             : null,
+          assignedModel: u.assignedModel || null,
+          customModelRouting: u.customModelRouting || null,
           createdAt: u.createdAt,
           rateLimit: rStats.rateLimit,
           usage: rStats.usage,
@@ -152,19 +154,26 @@ adminRouter.get('/users', adminAuthMiddleware, async (_req: Request, res: Respon
 });
 
 /**
- * 4. POST /api/admin/users/assign-key — Assign or unassign a dedicated OpenCode upstream key to a PRO user
+ * 4. POST /api/admin/users/update — Full User Configuration Update (API Key, Tier, Dedicated Upstream Key, Assigned Routed Model)
  */
-adminRouter.post('/users/assign-key', adminAuthMiddleware, async (req: Request, res: Response) => {
+adminRouter.post('/users/update', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
-    const { emailOrKey, providerKey } = req.body;
+    const { emailOrKey, apiKey, tier, assignedProviderKey, assignedModel, customModelRouting } = req.body;
     if (!emailOrKey) {
       return res.status(400).json({
         success: false,
-        error: "Missing parameter: 'emailOrKey' is required.",
+        error: "Missing required parameter: 'emailOrKey' is required.",
       });
     }
 
-    const updated = await assignProviderKeyToUser(emailOrKey, providerKey || '');
+    const updated = await updateUserConfigInDb(emailOrKey, {
+      apiKey,
+      tier,
+      assignedProviderKey,
+      assignedModel,
+      customModelRouting,
+    });
+
     if (!updated) {
       return res.status(404).json({
         success: false,
@@ -174,26 +183,26 @@ adminRouter.post('/users/assign-key', adminAuthMiddleware, async (req: Request, 
 
     return res.json({
       success: true,
-      message: providerKey
-        ? `Dedicated OpenCode key '${providerKey.slice(0, 7)}...${providerKey.slice(-6)}' assigned to ${updated.email}.`
-        : `Dedicated key removed. User ${updated.email} reverted to default server key.`,
+      message: `User '${updated.email}' configuration updated successfully.`,
       user: {
         id: updated.id,
         email: updated.email,
         apiKey: updated.apiKey,
         tier: updated.tier,
-        assignedProviderKey: updated.assignedProviderKey,
+        assignedProviderKey: updated.assignedProviderKey || null,
+        assignedModel: updated.assignedModel || null,
+        customModelRouting: updated.customModelRouting || null,
         updatedAt: updated.updatedAt,
       },
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Error assigning dedicated key';
+    const message = err instanceof Error ? err.message : 'Error updating user configuration';
     return res.status(500).json({ success: false, error: message });
   }
 });
 
 /**
- * 5. POST /api/admin/users/tier — Change user tier to 'pro', 'free', 'enterprise'
+ * 5. POST /api/admin/users/tier — Quick tier toggle
  */
 adminRouter.post('/users/tier', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
@@ -233,17 +242,17 @@ adminRouter.post('/users/tier', adminAuthMiddleware, async (req: Request, res: R
 });
 
 /**
- * 6. POST /api/admin/users/create — Create user with custom tier
+ * 6. POST /api/admin/users/create — Create user with custom tier & model
  */
 adminRouter.post('/users/create', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
-    const { email, tier, preferredApiKey } = req.body;
+    const { email, tier, preferredApiKey, assignedProviderKey, assignedModel } = req.body;
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email is required.' });
     }
 
     const assignedTier: UserTier = tier === 'enterprise' || tier === 'pro' ? tier : 'free';
-    const user = await createOrGetDbUser(preferredApiKey, email, assignedTier);
+    const user = await createOrGetDbUser(preferredApiKey, email, assignedTier, assignedProviderKey, assignedModel);
 
     return res.status(201).json({
       success: true,

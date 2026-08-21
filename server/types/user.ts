@@ -29,11 +29,13 @@ export interface UserAccount {
   apiKey: string; // sk-<randomhex>
   apiKeyHash?: string;
   tier: UserTier;
-  assignedProviderKey?: string; // Dedicated upstream OpenCode Zen key for PRO user
+  assignedProviderKey?: string; // Dedicated upstream NewAPI/OpenCode key for this user
+  assignedModel?: string; // Custom target model routing for this user (e.g. claude-3-7-sonnet, gpt-4o)
+  customModelRouting?: Record<string, string>; // e.g. { "claude-opus-5": "claude-3-7-sonnet-20250219" }
   createdAt: string;
   updatedAt: string;
   usage: UserUsage;
-  usageLogs: UsageLog[];
+  usageLogs?: UsageLog[];
 }
 
 export interface ModelPricing {

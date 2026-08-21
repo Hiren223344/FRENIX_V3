@@ -12,7 +12,8 @@ import {
   Zap,
   Activity,
   Layers,
-  Link2,
+  Settings,
+  Cpu,
   Unlink2,
 } from 'lucide-react';
 import { useToasts } from '../components/ui/toast';
@@ -41,6 +42,8 @@ interface AdminUserItem {
   tier: 'free' | 'pro' | 'enterprise';
   assignedProviderKey?: string | null;
   maskedAssignedKey?: string | null;
+  assignedModel?: string | null;
+  customModelRouting?: Record<string, string> | null;
   createdAt: string;
   rateLimit?: {
     limit: number;
@@ -57,6 +60,18 @@ interface AdminUserItem {
     };
   };
 }
+
+const PRESET_MODELS = [
+  { id: '', label: 'Default Global Routing (claude-3-7-sonnet-20250219)' },
+  { id: 'claude-3-7-sonnet-20250219', label: 'Claude 3.7 Sonnet (Hybrid Reasoning)' },
+  { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet (v2 Oct 2024)' },
+  { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
+  { id: 'gpt-4o', label: 'GPT-4o (Omni)' },
+  { id: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+  { id: 'deepseek-chat', label: 'DeepSeek V3 (Chat)' },
+  { id: 'deepseek-reasoner', label: 'DeepSeek R1 (Reasoner)' },
+  { id: 'mimo-v2.5-free', label: 'Mimo v2.5 Free' },
+];
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onNavigateHome,
@@ -82,12 +97,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // New user form state
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserTier, setNewUserTier] = useState<'free' | 'pro' | 'enterprise'>('pro');
+  const [newUserModel, setNewUserModel] = useState('');
   const [showAddUserModal, setShowAddUserModal] = useState(false);
 
-  // Dedicated Key Assignment Modal state
-  const [assignUserModal, setAssignUserModal] = useState<AdminUserItem | null>(null);
-  const [customAssignKey, setCustomAssignKey] = useState<string>('');
-  const [assigning, setAssigning] = useState<boolean>(false);
+  // Edit User Configuration Modal state
+  const [editingUser, setEditingUser] = useState<AdminUserItem | null>(null);
+  const [editClientApiKey, setEditClientApiKey] = useState('');
+  const [editTier, setEditTier] = useState<'free' | 'pro' | 'enterprise'>('pro');
+  const [editUpstreamKey, setEditUpstreamKey] = useState('');
+  const [editAssignedModel, setEditAssignedModel] = useState('');
+  const [savingConfig, setSavingConfig] = useState(false);
 
   const getAdminToken = () => sessionStorage.getItem('frenix_admin_token') || '';
 
@@ -133,7 +152,54 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     loadAdminData();
   }, [loadAdminData]);
 
-  // Handle Tier Change (One-click)
+  // Open Edit Modal for a User
+  const handleOpenEditModal = (u: AdminUserItem) => {
+    setEditingUser(u);
+    setEditClientApiKey(u.apiKey);
+    setEditTier(u.tier);
+    setEditUpstreamKey(u.assignedProviderKey || '');
+    setEditAssignedModel(u.assignedModel || '');
+  };
+
+  // Save Full User Configuration
+  const handleSaveUserConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUser) return;
+
+    const token = getAdminToken();
+    try {
+      setSavingConfig(true);
+      const res = await fetch('/api/admin/users/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': token,
+        },
+        body: JSON.stringify({
+          emailOrKey: editingUser.email,
+          apiKey: editClientApiKey.trim() || undefined,
+          tier: editTier,
+          assignedProviderKey: editUpstreamKey.trim(),
+          assignedModel: editAssignedModel.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        toasts.success(data.message || 'User configuration updated successfully.');
+        setEditingUser(null);
+        loadAdminData();
+      } else {
+        toasts.error(data.error || 'Failed to update user configuration.');
+      }
+    } catch {
+      toasts.error('Network error updating user.');
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  // Quick Tier Toggle
   const handleChangeTier = async (emailOrKey: string, newTier: 'free' | 'pro' | 'enterprise') => {
     const token = getAdminToken();
     try {
@@ -163,77 +229,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Handle Dedicated Provider Key Assignment
-  const handleSaveAssignedKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!assignUserModal) return;
-
-    const keyToAssign = customAssignKey.trim();
-    if (!keyToAssign.startsWith('sk-')) {
-      toasts.warning("Dedicated OpenCode key must start with 'sk-'.");
-      return;
-    }
-
-    const token = getAdminToken();
-
-    try {
-      setAssigning(true);
-      const res = await fetch('/api/admin/users/assign-key', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': token,
-        },
-        body: JSON.stringify({
-          emailOrKey: assignUserModal.email,
-          providerKey: keyToAssign,
-        }),
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        toasts.success(data.message);
-        setAssignUserModal(null);
-        setCustomAssignKey('');
-        loadAdminData();
-      } else {
-        toasts.error(data.error || 'Failed to assign key.');
-      }
-    } catch {
-      toasts.error('Network error assigning key.');
-    } finally {
-      setAssigning(false);
-    }
-  };
-
-  // Remove Dedicated Key (Revert to default)
-  const handleRemoveAssignedKey = async (userEmail: string) => {
-    const token = getAdminToken();
-    try {
-      const res = await fetch('/api/admin/users/assign-key', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': token,
-        },
-        body: JSON.stringify({
-          emailOrKey: userEmail,
-          providerKey: '',
-        }),
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        toasts.success(data.message);
-        loadAdminData();
-      } else {
-        toasts.error(data.error || 'Failed to unassign key.');
-      }
-    } catch {
-      toasts.error('Network error unassigning key.');
-    }
-  };
-
   // Create User
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -250,13 +245,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           'Content-Type': 'application/json',
           'x-admin-token': token,
         },
-        body: JSON.stringify({ email: newUserEmail, tier: newUserTier }),
+        body: JSON.stringify({
+          email: newUserEmail,
+          tier: newUserTier,
+          assignedModel: newUserModel.trim() || undefined,
+        }),
       });
 
       const data = await res.json();
       if (res.ok) {
         toasts.success(`User '${newUserEmail}' created with ${newUserTier.toUpperCase()} tier.`);
         setNewUserEmail('');
+        setNewUserModel('');
         setShowAddUserModal(false);
         loadAdminData();
       } else {
@@ -284,7 +284,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     (u) =>
       u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.apiKey.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.tier.toLowerCase().includes(searchQuery.toLowerCase())
+      u.tier.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (u.assignedModel && u.assignedModel.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   return (
@@ -299,7 +300,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
             <div>
               <div className="adm-brand-title">GATEWAY ADMIN PORTAL</div>
-              <div className="adm-brand-sub">Root Controller &amp; Dedicated Key Authority</div>
+              <div className="adm-brand-sub">Provider-1 (newapi.frenix.sh) &amp; Per-User Model Router</div>
             </div>
           </div>
 
@@ -352,31 +353,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           <div className="adm-kpi-card">
             <div className="adm-kpi-header">
+              <span className="adm-kpi-label">Upstream Gateway</span>
+              <Cpu size={16} className="text-white/70" />
+            </div>
+            <div className="adm-kpi-value text-sm font-mono mt-1 text-white/90">newapi.frenix.sh/v1</div>
+            <div className="adm-kpi-sub">Provider-1 Active Gateway</div>
+          </div>
+
+          <div className="adm-kpi-card">
+            <div className="adm-kpi-header">
               <span className="adm-kpi-label">Total Requests</span>
               <Activity size={16} className="text-white/70" />
             </div>
             <div className="adm-kpi-value">{stats.totalRequests.toLocaleString()}</div>
             <div className="adm-kpi-sub">Live across all API keys</div>
           </div>
-
-          <div className="adm-kpi-card">
-            <div className="adm-kpi-header">
-              <span className="adm-kpi-label">Total Tokens Processed</span>
-              <Layers size={16} className="text-white/70" />
-            </div>
-            <div className="adm-kpi-value">{stats.totalTokens.toLocaleString()}</div>
-            <div className="adm-kpi-sub">{(stats.totalTokens / 1000).toFixed(1)}k tokens aggregate</div>
-          </div>
         </section>
 
-        {/* Main Deck: Full Width Users & Dedicated Key Binding */}
+        {/* Main Deck: Full Width Users & Model Routing Table */}
         <div className="adm-deck-single">
           <section className="adm-deck-card adm-users-card">
             <div className="adm-deck-header">
               <div>
-                <h2 className="adm-deck-title">User Accounts &amp; Dedicated Upstream Key Binding</h2>
+                <h2 className="adm-deck-title">User Accounts, Dedicated Keys &amp; Model Routing</h2>
                 <p className="adm-deck-sub">
-                  Assign 1 dedicated OpenCode key to each PRO user so they enjoy full upstream limits without sharing capacity.
+                  Assign custom Claude model routing and dedicated NewAPI upstream keys per user.
                 </p>
               </div>
 
@@ -387,7 +388,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search email or key..."
+                    placeholder="Search email, key, model..."
                     className="adm-search-input"
                   />
                 </div>
@@ -410,10 +411,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <tr>
                     <th>User / Email</th>
                     <th>Client API Key</th>
-                    <th>Current Tier</th>
+                    <th>Tier</th>
                     <th>Dedicated Upstream Key</th>
+                    <th>Routed Claude Model</th>
                     <th>Requests</th>
-                    <th>Tokens</th>
                     <th style={{ textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
@@ -456,42 +457,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <Zap size={11} className="text-yellow-400 mr-1" />
                                 {u.maskedAssignedKey || 'Dedicated'}
                               </span>
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveAssignedKey(u.email)}
-                                className="adm-unlink-btn"
-                                title="Unbind dedicated key (revert to default)"
-                              >
-                                <Unlink2 size={12} />
-                              </button>
                             </div>
                           ) : (
-                            <span className="adm-pool-badge">
-                              Default Server Key
+                            <span className="adm-pool-badge">Default Server Key</span>
+                          )}
+                        </td>
+                        <td>
+                          {u.assignedModel ? (
+                            <span className="adm-model-badge">
+                              <Cpu size={11} className="mr-1 text-cyan-400" />
+                              {u.assignedModel}
                             </span>
+                          ) : (
+                            <span className="adm-pool-badge">Global (claude-3-7-sonnet)</span>
                           )}
                         </td>
                         <td>{u.usage?.totalRequests || 0}</td>
-                        <td>{(u.usage?.tokens?.total || 0).toLocaleString()}</td>
                         <td>
                           <div className="adm-tier-btn-group">
                             <button
                               type="button"
-                              onClick={() => {
-                                setAssignUserModal(u);
-                                setCustomAssignKey(u.assignedProviderKey || '');
-                              }}
+                              onClick={() => handleOpenEditModal(u)}
                               className="adm-tier-btn adm-btn-keybind"
-                              title="Assign 1 Dedicated OpenCode Upstream Key to this User"
+                              title="Edit user client key, dedicated upstream key, tier, and model routing"
                             >
-                              <Link2 size={12} className="inline mr-1" />
-                              Assign Key
+                              <Settings size={12} className="inline mr-1" />
+                              Edit Config
                             </button>
                             <button
                               type="button"
                               onClick={() => handleChangeTier(u.email, 'pro')}
                               className={`adm-tier-btn ${u.tier === 'pro' ? 'active-pro' : ''}`}
-                              title="Promote to Pro tier (Access to claude-opus-5)"
+                              title="Promote to Pro tier"
                             >
                               PRO
                             </button>
@@ -515,57 +512,96 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </div>
 
-      {/* Modal: Assign Dedicated Key to User */}
-      {assignUserModal && (
+      {/* Modal: Edit Full User Configuration (Key, Tier, Upstream Key, Model Routing) */}
+      {editingUser && (
         <div className="adm-modal-backdrop">
           <div className="adm-modal-card">
             <h3 className="adm-modal-title">
-              Assign Dedicated OpenCode Key
+              Edit User &amp; Model Routing Configuration
             </h3>
             <p className="adm-modal-sub">
-              Target User: <strong className="text-white">{assignUserModal.email}</strong>
+              Target User: <strong className="text-white">{editingUser.email}</strong>
             </p>
 
-            <form onSubmit={handleSaveAssignedKey} className="adm-modal-form">
+            <form onSubmit={handleSaveUserConfig} className="adm-modal-form">
               <div className="adm-form-group">
-                <label className="adm-label">Paste OpenCode Upstream API Key (sk-...)</label>
+                <label className="adm-label">Client API Key (Frenix Key for Client Apps)</label>
                 <input
                   type="text"
-                  value={customAssignKey}
-                  onChange={(e) => setCustomAssignKey(e.target.value)}
-                  placeholder="sk-a3xZh5wVaJdZlMdnIf7uMX8CswUR..."
+                  value={editClientApiKey}
+                  onChange={(e) => setEditClientApiKey(e.target.value)}
+                  placeholder="sk-..."
                   className="adm-modal-input font-mono"
                   required
-                  autoFocus
+                />
+              </div>
+
+              <div className="adm-form-group">
+                <label className="adm-label">Subscription Tier</label>
+                <select
+                  value={editTier}
+                  onChange={(e) => setEditTier(e.target.value as any)}
+                  className="adm-modal-select"
+                >
+                  <option value="free">Free Tier</option>
+                  <option value="pro">Pro Tier (Full access to Claude models)</option>
+                  <option value="enterprise">Enterprise Tier</option>
+                </select>
+              </div>
+
+              <div className="adm-form-group">
+                <label className="adm-label">Dedicated Upstream API Key (NewAPI / Upstream sk-...)</label>
+                <input
+                  type="text"
+                  value={editUpstreamKey}
+                  onChange={(e) => setEditUpstreamKey(e.target.value)}
+                  placeholder="Leave empty to use server default key"
+                  className="adm-modal-input font-mono"
                 />
                 <span className="text-xs text-white/40 mt-1">
-                  All requests from {assignUserModal.email} will be routed exclusively to this key.
+                  Requests from this user will be authenticated using this dedicated key on <code>https://newapi.frenix.sh/v1</code>.
+                </span>
+              </div>
+
+              <div className="adm-form-group">
+                <label className="adm-label">Assigned Target Claude Model for this User</label>
+                <select
+                  value={editAssignedModel}
+                  onChange={(e) => setEditAssignedModel(e.target.value)}
+                  className="adm-modal-select"
+                >
+                  {PRESET_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={editAssignedModel}
+                  onChange={(e) => setEditAssignedModel(e.target.value)}
+                  placeholder="Or enter custom model ID (e.g. claude-3-7-sonnet-20250219)"
+                  className="adm-modal-input font-mono mt-2"
+                />
+                <span className="text-xs text-white/40 mt-1">
+                  When this user requests Claude / Opus models, the request will route directly to this target model.
                 </span>
               </div>
 
               <div className="adm-modal-actions">
-                {assignUserModal.assignedProviderKey && (
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveAssignedKey(assignUserModal.email)}
-                    className="adm-btn adm-btn-danger mr-auto"
-                  >
-                    Unbind Key
-                  </button>
-                )}
                 <button
                   type="button"
-                  onClick={() => setAssignUserModal(null)}
+                  onClick={() => setEditingUser(null)}
                   className="adm-btn adm-btn-secondary"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={assigning || !customAssignKey.trim()}
+                  disabled={savingConfig}
                   className="adm-btn adm-btn-primary"
                 >
-                  {assigning ? 'Binding...' : 'Save Dedicated Key'}
+                  {savingConfig ? 'Saving...' : 'Save Configuration'}
                 </button>
               </div>
             </form>
@@ -577,7 +613,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {showAddUserModal && (
         <div className="adm-modal-backdrop">
           <div className="adm-modal-card">
-            <h3 className="adm-modal-title">Register User with Tier</h3>
+            <h3 className="adm-modal-title">Register User with Tier &amp; Model Routing</h3>
             <form onSubmit={handleCreateUser} className="adm-modal-form">
               <div className="adm-form-group">
                 <label className="adm-label">User Email Address</label>
@@ -599,8 +635,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="adm-modal-select"
                 >
                   <option value="free">Free Tier (Standard models)</option>
-                  <option value="pro">Pro Tier (Full access to claude-opus-5 &amp; GPT-4o)</option>
+                  <option value="pro">Pro Tier (Full access to claude-opus-5 &amp; Claude 3.7)</option>
                   <option value="enterprise">Enterprise Tier</option>
+                </select>
+              </div>
+
+              <div className="adm-form-group">
+                <label className="adm-label">Assigned Target Model (Optional)</label>
+                <select
+                  value={newUserModel}
+                  onChange={(e) => setNewUserModel(e.target.value)}
+                  className="adm-modal-select"
+                >
+                  {PRESET_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
                 </select>
               </div>
 

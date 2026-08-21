@@ -87,6 +87,8 @@ export async function getUserByApiKeyFromDb(apiKey: string): Promise<UserAccount
             apiKey: data.api_key,
             tier: (data.tier as UserTier) || 'free',
             assignedProviderKey: data.assigned_provider_key || undefined,
+            assignedModel: data.assigned_model || undefined,
+            customModelRouting: data.custom_model_routing || undefined,
             createdAt: data.created_at || new Date().toISOString(),
             updatedAt: data.updated_at || new Date().toISOString(),
             usage: {
@@ -142,6 +144,8 @@ export async function getUserByEmailFromDb(email: string): Promise<UserAccount |
             apiKey: data.api_key,
             tier: (data.tier as UserTier) || 'free',
             assignedProviderKey: data.assigned_provider_key || undefined,
+            assignedModel: data.assigned_model || undefined,
+            customModelRouting: data.custom_model_routing || undefined,
             createdAt: data.created_at || new Date().toISOString(),
             updatedAt: data.updated_at || new Date().toISOString(),
             usage: {
@@ -176,7 +180,8 @@ export async function createOrGetDbUser(
   apiKey?: string,
   email?: string,
   tier: UserTier = 'free',
-  assignedProviderKey?: string
+  assignedProviderKey?: string,
+  assignedModel?: string
 ): Promise<UserAccount> {
   const cleanKey = apiKey?.trim();
   const cleanEmail = email?.trim().toLowerCase();
@@ -220,6 +225,7 @@ export async function createOrGetDbUser(
     apiKey: finalKey,
     tier,
     assignedProviderKey: assignedProviderKey || undefined,
+    assignedModel: assignedModel || undefined,
     createdAt: now,
     updatedAt: now,
     usage: {
@@ -251,6 +257,7 @@ export async function createOrGetDbUser(
             api_key: finalKey,
             tier,
             assigned_provider_key: assignedProviderKey || null,
+            assigned_model: assignedModel || null,
             created_at: now,
             updated_at: now,
           },
@@ -270,7 +277,13 @@ export async function createOrGetDbUser(
  */
 export async function updateUserInDb(
   apiKeyOrEmail: string,
-  fieldsToUpdate: Partial<{ email: string; api_key: string; tier: UserTier; assigned_provider_key: string | null }>
+  fieldsToUpdate: Partial<{
+    email: string;
+    api_key: string;
+    tier: UserTier;
+    assigned_provider_key: string | null;
+    assigned_model: string | null;
+  }>
 ): Promise<void> {
   const clean = apiKeyOrEmail.trim().toLowerCase();
   const user = usersByEmail.get(clean) || usersByApiKey.get(apiKeyOrEmail.trim());
@@ -280,6 +293,9 @@ export async function updateUserInDb(
     if (fieldsToUpdate.tier) user.tier = fieldsToUpdate.tier;
     if ('assigned_provider_key' in fieldsToUpdate) {
       user.assignedProviderKey = fieldsToUpdate.assigned_provider_key || undefined;
+    }
+    if ('assigned_model' in fieldsToUpdate) {
+      user.assignedModel = fieldsToUpdate.assigned_model || undefined;
     }
     user.updatedAt = new Date().toISOString();
     usersByEmail.set(user.email.toLowerCase(), user);
@@ -335,6 +351,7 @@ export async function updateUserTierInDb(emailOrKey: string, newTier: UserTier):
             apiKey: data.api_key,
             tier: data.tier as UserTier,
             assignedProviderKey: data.assigned_provider_key || undefined,
+            assignedModel: data.assigned_model || undefined,
             createdAt: data.created_at,
             updatedAt: data.updated_at,
             usage: {
@@ -362,19 +379,33 @@ export async function updateUserTierInDb(emailOrKey: string, newTier: UserTier):
 }
 
 /**
- * 6. Assign Dedicated OpenCode Upstream Key to User
+ * 6. Assign Dedicated Key & Custom Model Routing per User
  */
-export async function assignProviderKeyToUser(
+export async function updateUserConfigInDb(
   emailOrKey: string,
-  providerKey: string
+  updates: {
+    apiKey?: string;
+    tier?: UserTier;
+    assignedProviderKey?: string;
+    assignedModel?: string;
+    customModelRouting?: Record<string, string>;
+  }
 ): Promise<UserAccount | null> {
   const clean = emailOrKey.trim().toLowerCase();
-  const cleanKey = providerKey.trim();
   const now = new Date().toISOString();
 
   let user = usersByEmail.get(clean) || usersByApiKey.get(emailOrKey.trim());
   if (user) {
-    user.assignedProviderKey = cleanKey || undefined;
+    if (updates.tier) user.tier = updates.tier;
+    if (updates.assignedProviderKey !== undefined) user.assignedProviderKey = updates.assignedProviderKey.trim() || undefined;
+    if (updates.assignedModel !== undefined) user.assignedModel = updates.assignedModel.trim() || undefined;
+    if (updates.customModelRouting !== undefined) user.customModelRouting = updates.customModelRouting;
+    if (updates.apiKey && updates.apiKey.trim().startsWith('sk-')) {
+      const oldKey = user.apiKey;
+      usersByApiKey.delete(oldKey);
+      user.apiKey = updates.apiKey.trim();
+      usersByApiKey.set(user.apiKey, user);
+    }
     user.updatedAt = now;
     usersByEmail.set(user.email.toLowerCase(), user);
     usersByApiKey.set(user.apiKey, user);
@@ -385,9 +416,15 @@ export async function assignProviderKeyToUser(
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
+        const payload: Record<string, unknown> = { updated_at: now };
+        if (updates.tier) payload.tier = updates.tier;
+        if (updates.assignedProviderKey !== undefined) payload.assigned_provider_key = updates.assignedProviderKey.trim() || null;
+        if (updates.assignedModel !== undefined) payload.assigned_model = updates.assignedModel.trim() || null;
+        if (updates.apiKey) payload.api_key = updates.apiKey.trim();
+
         const { data, error } = await supabase
           .from('users')
-          .update({ assigned_provider_key: cleanKey || null, updated_at: now })
+          .update(payload)
           .or(`email.eq.${clean},api_key.eq.${emailOrKey.trim()}`)
           .select()
           .maybeSingle();
@@ -399,6 +436,7 @@ export async function assignProviderKeyToUser(
             apiKey: data.api_key,
             tier: data.tier as UserTier,
             assignedProviderKey: data.assigned_provider_key || undefined,
+            assignedModel: data.assigned_model || undefined,
             createdAt: data.created_at,
             updatedAt: data.updated_at,
             usage: {
@@ -417,7 +455,7 @@ export async function assignProviderKeyToUser(
           saveUsersToDisk();
         }
       } catch (err) {
-        console.warn('[DB Assign Provider Key Error]:', err);
+        console.warn('[DB Update User Config Error]:', err);
       }
     }
   }
@@ -426,7 +464,7 @@ export async function assignProviderKeyToUser(
 }
 
 /**
- * 7. Get all users for Admin Dashboard (Combines Supabase DB + Disk + Memory without dropping any users!)
+ * 7. Get all users for Admin Dashboard
  */
 export async function getAllUsersFromDb(): Promise<UserAccount[]> {
   const usersMap = new Map<string, UserAccount>();
@@ -464,6 +502,8 @@ export async function getAllUsersFromDb(): Promise<UserAccount[]> {
                 apiKey: d.api_key || existing?.apiKey || '',
                 tier: (d.tier as UserTier) || existing?.tier || 'free',
                 assignedProviderKey: d.assigned_provider_key || existing?.assignedProviderKey || undefined,
+                assignedModel: d.assigned_model || existing?.assignedModel || undefined,
+                customModelRouting: existing?.customModelRouting || undefined,
                 createdAt: d.created_at || existing?.createdAt || new Date().toISOString(),
                 updatedAt: d.updated_at || existing?.updatedAt || new Date().toISOString(),
                 usage: existing?.usage || {

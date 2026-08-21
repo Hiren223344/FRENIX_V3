@@ -6,10 +6,11 @@ import type {
   AnthropicMessagesRequest,
   AnthropicMessageResponse,
 } from '../types/anthropic.js';
+import type { UserAccount } from '../types/user.js';
 import { buildComposedSystemPrompt } from './identityService.js';
 
-export const PROVIDER_1_NAME = 'Provider-1 (OpenCode Zen)';
-export const DEFAULT_PROVIDER_1_URL = 'https://opencode.ai/zen/v1';
+export const PROVIDER_1_NAME = 'Provider-1 (NewAPI)';
+export const DEFAULT_PROVIDER_1_URL = 'https://newapi.frenix.sh/v1';
 
 // Active Key Pool for Automatic Failover on 429 Rate Limits
 export function getCandidateKeys(preferredKey?: string): string[] {
@@ -53,16 +54,10 @@ export function getCandidateKeys(preferredKey?: string): string[] {
   return list;
 }
 
-// Model Routing / Aliasing Map -> All routed to mimo-v2.5-free
+// Global Default Model Routing / Aliasing Map
 export const MODEL_ROUTING_MAP: Record<string, string> = {
-  'claude-opus-5': 'mimo-v2.5-free',
-  'claude-opus-5-2025': 'mimo-v2.5-free',
-  'deepseek-v4-flash': 'mimo-v2.5-free',
-  'deepseek-v4-flash-free': 'mimo-v2.5-free',
-  'deepseek-chat': 'mimo-v2.5-free',
-  'deepseek-reasoner': 'mimo-v2.5-free',
-  'deepseek-r1': 'mimo-v2.5-free',
-  'deepseek-v3': 'mimo-v2.5-free',
+  'claude-opus-5': 'claude-3-7-sonnet-20250219',
+  'claude-opus-5-2025': 'claude-3-7-sonnet-20250219',
 };
 
 // Model Fallback Map: If primary model is down or unavailable upstream, fallback automatically
@@ -81,11 +76,28 @@ export function getFallbackModel(modelName: string): string | null {
 }
 
 /**
- * Resolve target model according to routing rules
- * e.g. claude-opus-5 -> mimo-v2.5-free
+ * Resolve target model according to user configuration & routing rules
+ * 1. User specific model routing map (e.g. user.customModelRouting['claude-opus-5'] = 'gpt-4o')
+ * 2. User assigned model override (e.g. user.assignedModel = 'claude-3-7-sonnet-20250219')
+ * 3. Global routing map
  */
-export function resolveRoutedModel(requestedModel: string): string {
+export function resolveRoutedModel(requestedModel: string, user?: UserAccount | null): string {
   const normalized = (requestedModel || '').toLowerCase().trim();
+
+  // 1. Check user-specific custom model routing map
+  if (user?.customModelRouting && user.customModelRouting[normalized]) {
+    return user.customModelRouting[normalized];
+  }
+
+  // 2. Check user-specific assigned model override
+  if (user?.assignedModel && user.assignedModel.trim()) {
+    // If requested model is a claude variant or default, route to user's assigned model
+    if (normalized.includes('claude') || normalized.includes('opus') || normalized.includes('evolution')) {
+      return user.assignedModel.trim();
+    }
+  }
+
+  // 3. Global routing map
   return MODEL_ROUTING_MAP[normalized] || requestedModel;
 }
 
@@ -205,14 +217,14 @@ async function attemptProvider1Completion(
       }
 
       if (response.status === 429 || response.status === 401) {
-        console.warn(`[Provider-1 429/401] Key ${masked} rate limited. Immediately trying next candidate key (${i + 1}/${candidateKeys.length})...`);
+        console.warn(`[Provider-1 429/401] Key ${masked} rate limited on ${baseUrl}. Immediately trying next candidate key (${i + 1}/${candidateKeys.length})...`);
         continue;
       }
 
       const errorText = await response.text();
-      console.warn(`[Provider-1 ${targetModel} Error ${response.status} with key ${masked}]:`, errorText);
+      console.warn(`[Provider-1 ${targetModel} Error ${response.status} with key ${masked} on ${baseUrl}]:`, errorText);
     } catch (err: unknown) {
-      console.warn(`[Provider-1 Network Error with key ${masked}]:`, err instanceof Error ? err.message : err);
+      console.warn(`[Provider-1 Network Error with key ${masked} on ${baseUrl}]:`, err instanceof Error ? err.message : err);
     }
   }
 
@@ -220,20 +232,21 @@ async function attemptProvider1Completion(
 }
 
 /**
- * 1. Forward OpenAI Chat Completion to Provider-1 with Dedicated Key and Automated Model Fallback
+ * 1. Forward OpenAI Chat Completion to Provider-1 with User-specific routing and failover
  */
 export async function forwardChatCompletionToProvider1(
   payload: ChatCompletionRequest,
-  preferredKey?: string
+  preferredKey?: string,
+  user?: UserAccount | null
 ): Promise<ChatCompletionResponse | null> {
   const originalModel = payload.model;
-  const targetModel = resolveRoutedModel(payload.model);
+  const targetModel = resolveRoutedModel(payload.model, user);
   const cleanMessages = sanitizeMessages(payload.messages as any, undefined, originalModel);
 
   // 1. Initial attempt with target model
   let result = await attemptProvider1Completion(targetModel, cleanMessages, preferredKey);
 
-  // 2. If target model failed (e.g. deepseek-v4-flash unavailable), fallback to mimo-v2.5-free automatically
+  // 2. If target model failed, fallback to fallback model automatically
   if (!result) {
     const fallbackModel = getFallbackModel(targetModel) || getFallbackModel(originalModel);
     if (fallbackModel && fallbackModel !== targetModel) {
@@ -253,17 +266,18 @@ export async function forwardChatCompletionToProvider1(
 }
 
 /**
- * 2. Stream OpenAI SSE Chat Completion from Provider-1 with Dedicated Key and Automated Fallback
+ * 2. Stream OpenAI SSE Chat Completion from Provider-1 with User-specific routing and failover
  */
 export async function* streamChatCompletionFromProvider1(
   payload: ChatCompletionRequest,
-  preferredKey?: string
+  preferredKey?: string,
+  user?: UserAccount | null
 ): AsyncGenerator<string, boolean, unknown> {
   const originalModel = payload.model;
 
   // 1. Fetch live completion from Provider-1 with automated fallback & key failover
   try {
-    const nonStreamResult = await forwardChatCompletionToProvider1(payload, preferredKey);
+    const nonStreamResult = await forwardChatCompletionToProvider1(payload, preferredKey, user);
     if (nonStreamResult) {
       const content = nonStreamResult.choices?.[0]?.message?.content || '';
       const completionId = nonStreamResult.id || `chatcmpl-${Date.now()}`;
@@ -311,14 +325,15 @@ export async function* streamChatCompletionFromProvider1(
 }
 
 /**
- * 3. Forward Anthropic Messages request to Provider-1 with Dedicated Key
+ * 3. Forward Anthropic Messages request to Provider-1 with User-specific routing
  */
 export async function forwardAnthropicMessageToProvider1(
   payload: AnthropicMessagesRequest,
-  preferredKey?: string
+  preferredKey?: string,
+  user?: UserAccount | null
 ): Promise<AnthropicMessageResponse | null> {
   const originalModel = payload.model;
-  const targetModel = resolveRoutedModel(payload.model);
+  const targetModel = resolveRoutedModel(payload.model, user);
   const cleanMessages = sanitizeMessages(payload.messages as any, payload.system, originalModel);
 
   const openAiPayload: ChatCompletionRequest = {
@@ -327,7 +342,7 @@ export async function forwardAnthropicMessageToProvider1(
     stream: false,
   };
 
-  const openAiResult = await forwardChatCompletionToProvider1(openAiPayload, preferredKey);
+  const openAiResult = await forwardChatCompletionToProvider1(openAiPayload, preferredKey, user);
   if (openAiResult) {
     const reply = openAiResult.choices?.[0]?.message?.content || '';
     return {
@@ -349,16 +364,17 @@ export async function forwardAnthropicMessageToProvider1(
 }
 
 /**
- * 4. Stream Anthropic Messages from Provider-1 with Dedicated Key & Model Routing
+ * 4. Stream Anthropic Messages from Provider-1 with User-specific routing
  */
 export async function* streamAnthropicMessageFromProvider1(
   payload: AnthropicMessagesRequest,
-  preferredKey?: string
+  preferredKey?: string,
+  user?: UserAccount | null
 ): AsyncGenerator<string, boolean, unknown> {
   const originalModel = payload.model;
   const msgId = `msg_${Date.now()}`;
 
-  const directResult = await forwardAnthropicMessageToProvider1(payload, preferredKey);
+  const directResult = await forwardAnthropicMessageToProvider1(payload, preferredKey, user);
   if (directResult) {
     const textContent = directResult.content?.[0]?.text || '';
     const inputTokens = directResult.usage?.input_tokens || 20;

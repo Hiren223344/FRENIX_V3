@@ -73,11 +73,11 @@ export async function createAnthropicMessage(
     system: composedSystem,
   };
 
-  // 1. Dispatch to Provider-1 (OpenCode Zen Gateway) with Dedicated Key if PRO user
+  // 1. Dispatch to Provider-1 (NewAPI Gateway) with Dedicated Key & User-specific model routing
   try {
     const user = _apiKey ? await getUserByApiKeyFromDb(_apiKey) : null;
     const preferredKey = user?.assignedProviderKey;
-    const provider1Result = await forwardAnthropicMessageToProvider1(finalReq, preferredKey);
+    const provider1Result = await forwardAnthropicMessageToProvider1(finalReq, preferredKey, user);
     if (provider1Result) {
       return provider1Result;
     }
@@ -132,12 +132,12 @@ export async function* streamAnthropicMessage(
     system: composedSystem,
   };
 
-  // 1. Attempt Streaming from Provider-1 with Dedicated Key if PRO user
+  // 1. Attempt Streaming from Provider-1 with Dedicated Key & User-specific model routing
   let streamedSuccessfully = false;
   try {
     const user = _apiKey ? await getUserByApiKeyFromDb(_apiKey) : null;
     const preferredKey = user?.assignedProviderKey;
-    const provider1Stream = streamAnthropicMessageFromProvider1(finalReq, preferredKey);
+    const provider1Stream = streamAnthropicMessageFromProvider1(finalReq, preferredKey, user);
     for await (const chunk of provider1Stream) {
       streamedSuccessfully = true;
       yield chunk;
