@@ -1,6 +1,7 @@
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool' | 'function';
   content: string | Array<{ type: string; text?: string; [key: string]: unknown }>;
+  reasoning_content?: string;
   name?: string;
   tool_calls?: unknown[];
 }
@@ -25,6 +26,7 @@ export interface ChatCompletionChoice {
   message: {
     role: 'assistant';
     content: string;
+    reasoning_content?: string;
   };
   logprobs: null | unknown;
   finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter';
@@ -49,6 +51,7 @@ export interface ChatCompletionChunkChoice {
   delta: {
     role?: 'assistant';
     content?: string;
+    reasoning_content?: string;
   };
   logprobs: null | unknown;
   finish_reason: null | 'stop' | 'length';

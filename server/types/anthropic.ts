@@ -5,6 +5,11 @@ export interface AnthropicTextBlock {
   text: string;
 }
 
+export interface AnthropicThinkingBlock {
+  type: 'thinking';
+  thinking: string;
+}
+
 export interface AnthropicImageBlock {
   type: 'image';
   source: {
@@ -14,7 +19,7 @@ export interface AnthropicImageBlock {
   };
 }
 
-export type AnthropicContentBlock = AnthropicTextBlock | AnthropicImageBlock | { type: string; [key: string]: unknown };
+export type AnthropicContentBlock = AnthropicTextBlock | AnthropicThinkingBlock | AnthropicImageBlock | { type: string; [key: string]: unknown };
 
 export interface AnthropicMessage {
   role: AnthropicRole;
@@ -50,7 +55,7 @@ export interface AnthropicMessageResponse {
   type: 'message';
   role: 'assistant';
   model: string;
-  content: AnthropicTextBlock[];
+  content: (AnthropicTextBlock | AnthropicThinkingBlock | { type: string; [key: string]: unknown })[];
   stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | null;
   stop_sequence: string | null;
   usage: AnthropicUsage;

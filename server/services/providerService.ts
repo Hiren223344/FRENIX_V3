@@ -249,6 +249,40 @@ async function attemptProvider1Completion(
 }
 
 /**
+ * Extract reasoning thoughts between <think> and </think> and separate from main content
+ */
+export function parseReasoningAndContent(raw: string): { reasoningContent?: string; mainContent: string } {
+  if (!raw) return { mainContent: '' };
+
+  const thinkBlockRegex = /<think>([\s\S]*?)<\/think>/i;
+  const match = raw.match(thinkBlockRegex);
+
+  if (match) {
+    const reasoningContent = match[1].trim();
+    const mainContent = raw.replace(thinkBlockRegex, '').trim();
+    return { reasoningContent: reasoningContent || undefined, mainContent };
+  }
+
+  if (raw.includes('<think>') && !raw.includes('</think>')) {
+    const parts = raw.split('<think>');
+    return {
+      reasoningContent: (parts[1] || '').trim() || undefined,
+      mainContent: (parts[0] || '').trim(),
+    };
+  }
+
+  if (raw.includes('</think>') && !raw.includes('<think>')) {
+    const parts = raw.split('</think>');
+    return {
+      reasoningContent: (parts[0] || '').trim() || undefined,
+      mainContent: (parts[1] || '').trim(),
+    };
+  }
+
+  return { mainContent: raw };
+}
+
+/**
  * 1. Forward OpenAI Chat Completion to Provider-1 with User-specific routing and failover
  */
 export async function forwardChatCompletionToProvider1(
@@ -273,9 +307,27 @@ export async function forwardChatCompletionToProvider1(
   }
 
   if (result) {
+    const originalMessage = result.choices?.[0]?.message;
+    const rawContent = originalMessage?.content || '';
+    const existingReasoning = (originalMessage as any)?.reasoning_content;
+
+    const { reasoningContent, mainContent } = parseReasoningAndContent(rawContent);
+    const finalReasoning = existingReasoning || reasoningContent || undefined;
+    const finalContent = reasoningContent ? mainContent : rawContent;
+
     return {
       ...result,
       model: originalModel,
+      choices: [
+        {
+          ...result.choices[0],
+          message: {
+            role: originalMessage?.role || 'assistant',
+            content: finalContent,
+            reasoning_content: finalReasoning,
+          },
+        },
+      ],
     };
   }
 
@@ -296,7 +348,8 @@ export async function* streamChatCompletionFromProvider1(
   try {
     const nonStreamResult = await forwardChatCompletionToProvider1(payload, preferredKey, user);
     if (nonStreamResult) {
-      const content = nonStreamResult.choices?.[0]?.message?.content || '';
+      const mainContent = nonStreamResult.choices?.[0]?.message?.content || '';
+      const reasoningContent = nonStreamResult.choices?.[0]?.message?.reasoning_content || '';
       const completionId = nonStreamResult.id || `chatcmpl-${Date.now()}`;
       const created = nonStreamResult.created || Math.floor(Date.now() / 1000);
 
@@ -309,18 +362,36 @@ export async function* streamChatCompletionFromProvider1(
         choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
       })}\n\n`;
 
-      // Word-by-word real-time streaming
-      const words = content.split(' ');
-      for (let i = 0; i < words.length; i++) {
-        const chunkWord = (i === 0 ? '' : ' ') + words[i];
-        yield `data: ${JSON.stringify({
-          id: completionId,
-          object: 'chat.completion.chunk',
-          created,
-          model: originalModel,
-          choices: [{ index: 0, delta: { content: chunkWord }, finish_reason: null }],
-        })}\n\n`;
-        await new Promise((r) => setTimeout(r, 15));
+      // 1. Stream reasoning_content chunks first if model output thoughts
+      if (reasoningContent) {
+        const reasoningWords = reasoningContent.split(' ');
+        for (let i = 0; i < reasoningWords.length; i++) {
+          const chunkWord = (i === 0 ? '' : ' ') + reasoningWords[i];
+          yield `data: ${JSON.stringify({
+            id: completionId,
+            object: 'chat.completion.chunk',
+            created,
+            model: originalModel,
+            choices: [{ index: 0, delta: { reasoning_content: chunkWord }, finish_reason: null }],
+          })}\n\n`;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+      }
+
+      // 2. Stream main content chunks
+      if (mainContent) {
+        const words = mainContent.split(' ');
+        for (let i = 0; i < words.length; i++) {
+          const chunkWord = (i === 0 ? '' : ' ') + words[i];
+          yield `data: ${JSON.stringify({
+            id: completionId,
+            object: 'chat.completion.chunk',
+            created,
+            model: originalModel,
+            choices: [{ index: 0, delta: { content: chunkWord }, finish_reason: null }],
+          })}\n\n`;
+          await new Promise((r) => setTimeout(r, 10));
+        }
       }
 
       // Final stop chunk
@@ -361,13 +432,21 @@ export async function forwardAnthropicMessageToProvider1(
 
   const openAiResult = await forwardChatCompletionToProvider1(openAiPayload, preferredKey, user);
   if (openAiResult) {
-    const reply = openAiResult.choices?.[0]?.message?.content || '';
+    const mainContent = openAiResult.choices?.[0]?.message?.content || '';
+    const reasoningContent = openAiResult.choices?.[0]?.message?.reasoning_content || '';
+
+    const contentBlocks: any[] = [];
+    if (reasoningContent) {
+      contentBlocks.push({ type: 'thinking', thinking: reasoningContent });
+    }
+    contentBlocks.push({ type: 'text', text: mainContent });
+
     return {
       id: `msg_${(openAiResult.id || '').replace(/^chatcmpl-/, '')}`,
       type: 'message',
       role: 'assistant',
       model: originalModel,
-      content: [{ type: 'text', text: reply }],
+      content: contentBlocks,
       stop_reason: 'end_turn',
       stop_sequence: null,
       usage: {
@@ -393,9 +472,19 @@ export async function* streamAnthropicMessageFromProvider1(
 
   const directResult = await forwardAnthropicMessageToProvider1(payload, preferredKey, user);
   if (directResult) {
-    const textContent = directResult.content?.[0]?.text || '';
     const inputTokens = directResult.usage?.input_tokens || 20;
     const outputTokens = directResult.usage?.output_tokens || 20;
+
+    let thinkingText = '';
+    let responseText = '';
+
+    for (const block of directResult.content) {
+      if (block.type === 'thinking' && 'thinking' in block && typeof (block as any).thinking === 'string') {
+        thinkingText = (block as any).thinking;
+      } else if (block.type === 'text' && 'text' in block && typeof (block as any).text === 'string') {
+        responseText = (block as any).text;
+      }
+    }
 
     // message_start
     yield `event: message_start\ndata: ${JSON.stringify({
@@ -412,29 +501,56 @@ export async function* streamAnthropicMessageFromProvider1(
       },
     })}\n\n`;
 
-    // content_block_start
+    let blockIndex = 0;
+
+    // 1. Thinking block stream if thinking text exists
+    if (thinkingText) {
+      yield `event: content_block_start\ndata: ${JSON.stringify({
+        type: 'content_block_start',
+        index: blockIndex,
+        content_block: { type: 'thinking', thinking: '' },
+      })}\n\n`;
+
+      const tWords = thinkingText.split(' ');
+      for (let i = 0; i < tWords.length; i++) {
+        const chunkWord = (i === 0 ? '' : ' ') + tWords[i];
+        yield `event: content_block_delta\ndata: ${JSON.stringify({
+          type: 'content_block_delta',
+          index: blockIndex,
+          delta: { type: 'thinking_delta', thinking: chunkWord },
+        })}\n\n`;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      yield `event: content_block_stop\ndata: ${JSON.stringify({
+        type: 'content_block_stop',
+        index: blockIndex,
+      })}\n\n`;
+
+      blockIndex++;
+    }
+
+    // 2. Text block stream
     yield `event: content_block_start\ndata: ${JSON.stringify({
       type: 'content_block_start',
-      index: 0,
+      index: blockIndex,
       content_block: { type: 'text', text: '' },
     })}\n\n`;
 
-    // stream words
-    const words = textContent.split(' ');
-    for (let i = 0; i < words.length; i++) {
-      const chunkWord = (i === 0 ? '' : ' ') + words[i];
+    const rWords = responseText.split(' ');
+    for (let i = 0; i < rWords.length; i++) {
+      const chunkWord = (i === 0 ? '' : ' ') + rWords[i];
       yield `event: content_block_delta\ndata: ${JSON.stringify({
         type: 'content_block_delta',
-        index: 0,
+        index: blockIndex,
         delta: { type: 'text_delta', text: chunkWord },
       })}\n\n`;
-      await new Promise((r) => setTimeout(r, 15));
+      await new Promise((r) => setTimeout(r, 10));
     }
 
-    // content_block_stop
     yield `event: content_block_stop\ndata: ${JSON.stringify({
       type: 'content_block_stop',
-      index: 0,
+      index: blockIndex,
     })}\n\n`;
 
     // message_delta
