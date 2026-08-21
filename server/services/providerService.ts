@@ -15,10 +15,16 @@ export const DEFAULT_PROVIDER_1_KEY =
   process.env.OPENAI_API_KEY ||
   'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bpBTaqnl2kyGcjg6GcL9PqdOX6mnH8S';
 
-// Model Routing / Aliasing Map
+// Model Routing / Aliasing Map -> mimo-v2.5-free
 export const MODEL_ROUTING_MAP: Record<string, string> = {
   'claude-opus-5': 'mimo-v2.5-free',
   'claude-opus-5-2025': 'mimo-v2.5-free',
+  'deepseek-v4-flash': 'mimo-v2.5-free',
+  'deepseek-v4-flash-free': 'mimo-v2.5-free',
+  'deepseek-chat': 'mimo-v2.5-free',
+  'deepseek-reasoner': 'mimo-v2.5-free',
+  'deepseek-r1': 'mimo-v2.5-free',
+  'deepseek-v3': 'mimo-v2.5-free',
 };
 
 // Model Fallback Map: If primary model is down or unavailable upstream, fallback automatically
