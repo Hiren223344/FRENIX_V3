@@ -12,36 +12,46 @@ export const PROVIDER_1_NAME = 'Provider-1 (OpenCode Zen)';
 export const DEFAULT_PROVIDER_1_URL = 'https://opencode.ai/zen/v1';
 
 // Active Key Pool for Automatic Failover on 429 Rate Limits
-function loadCandidateKeys(): string[] {
+export function getCandidateKeys(preferredKey?: string): string[] {
+  const list: string[] = [];
+
+  // 1. Dedicated Assigned Key (highest priority)
+  if (preferredKey && preferredKey.trim().startsWith('sk-')) {
+    list.push(preferredKey.trim());
+  }
+
+  // 2. Keys from .env (PROVIDER_1_API_KEYS / PROVIDER_1_API_KEY)
   const envMulti = process.env.PROVIDER_1_API_KEYS || process.env.OPENAI_API_KEYS;
   if (envMulti) {
     const keys = envMulti
       .split(',')
       .map((k) => k.trim())
       .filter((k) => k.startsWith('sk-'));
-    if (keys.length > 0) return keys;
+    for (const k of keys) {
+      if (!list.includes(k)) list.push(k);
+    }
   }
 
   const envSingle = process.env.PROVIDER_1_API_KEY || process.env.OPENAI_API_KEY;
   if (envSingle && envSingle.trim().startsWith('sk-')) {
-    return [
-      envSingle.trim(),
-      'sk-a3xZh5wVaJdZlMdnIf7uMX8CswUR4UJIb79LrHApLW93kbQVmWUshFK2RyZQTZ2x',
-      'sk-Y2qeo16JleKRXmeqDh4I4PqY4JO1vEmchnDXUAxKIaphzt0onXH2twzTCTgHcOCK',
-      'sk-a24WFR2BPxwJgckqE1i6QQNyPBrywGU49g8Mc5nN0EWmaHCrVPVyMet2KyZsstq1',
-      'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bpBTaqnl2kyGcjg6GcL9PqdOX6mnH8S',
-    ];
+    const clean = envSingle.trim();
+    if (!list.includes(clean)) list.push(clean);
   }
 
-  return [
+  // 3. Fallback defaults
+  const defaults = [
     'sk-a3xZh5wVaJdZlMdnIf7uMX8CswUR4UJIb79LrHApLW93kbQVmWUshFK2RyZQTZ2x',
     'sk-Y2qeo16JleKRXmeqDh4I4PqY4JO1vEmchnDXUAxKIaphzt0onXH2twzTCTgHcOCK',
     'sk-a24WFR2BPxwJgckqE1i6QQNyPBrywGU49g8Mc5nN0EWmaHCrVPVyMet2KyZsstq1',
     'sk-tubtj6Jb2Qxmk48LtiYfDlAfRU1N1F3r3bpBTaqnl2kyGcjg6GcL9PqdOX6mnH8S',
   ];
-}
 
-export const FALLBACK_PROVIDER_KEYS: string[] = loadCandidateKeys();
+  for (const d of defaults) {
+    if (!list.includes(d)) list.push(d);
+  }
+
+  return list;
+}
 
 // Model Routing / Aliasing Map -> All routed to mimo-v2.5-free
 export const MODEL_ROUTING_MAP: Record<string, string> = {
@@ -173,16 +183,8 @@ async function attemptProvider1Completion(
     stream: false,
   };
 
-  // Build candidate keys: Preferred Dedicated Key FIRST, followed by fallback pool
-  const candidateKeys: string[] = [];
-  if (preferredKey && preferredKey.trim().startsWith('sk-')) {
-    candidateKeys.push(preferredKey.trim());
-  }
-  for (const k of FALLBACK_PROVIDER_KEYS) {
-    if (!candidateKeys.includes(k)) {
-      candidateKeys.push(k);
-    }
-  }
+  // Build candidate keys: Preferred Dedicated Key FIRST, followed by .env and fallback pool
+  const candidateKeys = getCandidateKeys(preferredKey);
 
   for (let i = 0; i < candidateKeys.length; i++) {
     const apiKey = candidateKeys[i];
